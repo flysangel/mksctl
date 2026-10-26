@@ -1,1 +1,2 @@
-provides: []
+provides:
+  - time-sync

@@ -34,3 +34,13 @@ _svc_start() {
   }
   rc-service "$1" start || return 1
 }
+
+# time_sync_enable — alpine 固定用 busybox 的 ntpd（OpenRC 服務）
+time_sync_enable() {
+  svc_enable ntpd || return 1
+}
+
+# time_sync_active — ntpd 在執行時回 0
+time_sync_active() {
+  rc-service ntpd status >/dev/null 2>&1
+}

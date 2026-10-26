@@ -1,0 +1,7 @@
+venue: vm
+requires:
+  - time-sync
+  - kernel
+packages:
+  - tzdata
+  - ntpdate

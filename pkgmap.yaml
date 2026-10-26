@@ -32,3 +32,14 @@ net-tools: { apk: [] }
 iproute2: { apk: [] }
 iftop: { apk: [] }
 traceroute: { apk: [], apt: [inetutils-traceroute] }
+
+# ntp：ubuntu 26.04 起沒有 ntpdate，改裝 ntpsec-ntpdate（22.04 到 26.04 都有）；
+# alpine 用 busybox 的 ntpd，不需要 ntpdate（[] 代表不用裝；null 會被 preflight 擋下）
+ntpdate: { apk: [], apt: [ntpsec-ntpdate] }
+
+# docker：ubuntu 的套件名稱就是邏輯名稱；alpine 的 docker 套件已含 cli 與 containerd
+docker-ce: { apk: [docker] }
+docker-ce-cli: { apk: [] }
+containerd.io: { apk: [] }
+docker-buildx-plugin: { apk: [docker-cli-buildx] }
+docker-compose-plugin: { apk: [docker-cli-compose] }
