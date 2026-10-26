@@ -18,8 +18,6 @@
 
 計畫 2 開工前先做：
 
-- 第二個帶 `apt_source` 的配方出現前，把 apt 金鑰預抓移到第 3 步。
-- `FindConflicts` 也要掃 `/etc/apt/sources.list`。
 - `TestNoSha256OutsideTrust` 要抓大寫十六進位，讀檔錯誤不能吞掉。
 - `rootOnce` 與 `Latest` 不記住暫時性的錯誤。
 - 狀態檔沒有鎖，兩個 install 同時跑會互相覆蓋。
@@ -28,7 +26,6 @@
 
 - 搬其餘配方。範圍是舊腳本合併兩發行版後的全部配方，只有 `ubuntu/app/mks` 不搬。
 - 做 `task trust:refresh -- <名稱>`，並替 gitkraken、postman 這類上游不提供雜湊的檔記下自己驗證的雜湊。
-- ubuntu 的 `apt` 配方與 `base` 的先後順序要定。
 - 聚合器 `aconfig` 與 `k8stools`，以及 xfce、lxqt 加 XRDP。
 
 ### 計畫 3：介面與發版

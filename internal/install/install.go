@@ -181,7 +181,11 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 	if fetcherHook != nil {
 		fetcherHook(fetcher)
 	}
-	plans, artifacts, diffs, err := fetchAll(ctx, fetcher, up, st, recipes, fetchDir, opt.AllowUnverified)
+	hc := deps.HTTP
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	plans, artifacts, keys, diffs, err := fetchAll(ctx, fetcher, up, hc, p, st, recipes, fetchDir, opt.AllowUnverified)
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +195,9 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 	}
 
 	// 4. 查 apt 來源衝突。這時還沒寫任何東西。
+	//    同一次安裝裡兩個配方寫同一個來源檔，後寫的會靜默蓋掉先寫的，所以也算衝突。
+	//    同一配方內的重複由 recipe.Validate 擋。
+	owner := map[string]string{}
 	for _, pl := range plans {
 		if pl.action == state.Run && len(pl.r.AptSources) > 0 && !p.Provides["apt"] && deps.Stdout != nil {
 			fmt.Fprintf(deps.Stdout, "Info: %s 的 apt_sources 在這個平台不適用，略過\n", pl.r.Name)
@@ -199,6 +206,14 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 			continue
 		}
 		for _, src := range pl.r.AptSources {
+			if first, ok := owner[src.File]; ok {
+				diffs = append(diffs, preflight.Difference{
+					Recipe: pl.r.Name, Kind: preflight.AptSourceConflict,
+					Detail: fmt.Sprintf("%s 也由配方 %s 寫入，同一次安裝只能有一個配方寫這個來源檔\nFix: 分兩次安裝，或改其中一個配方的 apt_sources.file", src.File, first),
+				})
+			} else {
+				owner[src.File] = pl.r.Name
+			}
 			cs, err := aptsource.FindConflicts(sysroot, src, p)
 			if err != nil {
 				return nil, err
@@ -219,14 +234,14 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 		return nil, nil
 	}
 
-	// 5. 寫套件來源與 alpine 套件庫，再更新索引。這是檢查通過前唯一會改機器的步驟：
+	// 5. 寫鏡像、apt 設定、套件來源與 alpine 套件庫，再更新索引。這是檢查通過前唯一會改機器的步驟：
 	//    不先寫來源，就無法確認來源裡的套件（例如 docker-ce）查得到。
 	//    沒有要跑的配方用到套件時，這一步什麼都不做。
 	idx := deps.Index
 	if idx == nil {
 		idx = pkgindex.For(p)
 	}
-	if err := prepareSources(ctx, deps.HTTP, sysroot, p, defs, plans, idx); err != nil {
+	if err := prepareSources(ctx, deps.Stdout, sysroot, p, defs, plans, keys, idx); err != nil {
 		return nil, err
 	}
 
@@ -330,14 +345,14 @@ func prepareFetchDir(dir, sysroot string, checkOnly bool) (string, func(), error
 	}, nil
 }
 
-// fetchAll 對每個配方決定版本與動作，並下載要執行的配方的 artifacts。
+// fetchAll 對每個配方決定版本與動作，並下載要執行的配方的 artifacts 與 apt 金鑰。
 // 失敗全部收集成差異再一起回傳，使用者才能一次看到所有下載問題。
-func fetchAll(ctx context.Context, f *fetch.Fetcher, up *upstream.Client, st state.File,
-	recipes []recipe.Recipe, fetchDir string, allowUnverified bool,
-) ([]plan, map[string]string, []preflight.Difference, error) {
-	var plans []plan
-	var diffs []preflight.Difference
-	artifacts := map[string]string{}
+// keys 的鍵是 aptKeyID 的結果，值是暫存目錄裡的金鑰檔。
+func fetchAll(ctx context.Context, f *fetch.Fetcher, up *upstream.Client, hc *http.Client, p platform.Platform,
+	st state.File, recipes []recipe.Recipe, fetchDir string, allowUnverified bool,
+) (plans []plan, artifacts, keys map[string]string, diffs []preflight.Difference, err error) {
+	artifacts = map[string]string{}
+	keys = map[string]string{}
 	for _, r := range recipes {
 		version := ""
 		if r.Latest != nil {
@@ -349,14 +364,28 @@ func fetchAll(ctx context.Context, f *fetch.Fetcher, up *upstream.Client, st sta
 			version = upstream.Effective(latest, r.Exclude)
 		}
 		act := state.Decide(st, r, version)
-		plans = append(plans, plan{r: r, version: version, action: act})
+		pl := plan{r: r, version: version, action: act}
+		plans = append(plans, pl)
 		if act == state.Skip {
 			continue // 略過的配方不下載，也不寫來源。
 		}
 		// 每個配方一個子目錄：不同配方的 artifact 檔名可能相同。
 		f.Dir = filepath.Join(fetchDir, r.Name)
 		if err := os.MkdirAll(f.Dir, 0o755); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
+		}
+		// apt 金鑰也在這一步下載：網址壞了屬於下載失敗，要跟其他下載問題一起列出，
+		// 而且要在第 5 步寫任何來源之前發現。金鑰放在 artifact 用不到的子目錄，檔名取來源檔名
+		// （同一配方內不重複，由 recipe.Validate 擋）。
+		if usesAptSource(pl, p) {
+			for _, src := range r.AptSources {
+				dest := filepath.Join(f.Dir, ".apt-keys", src.File)
+				if err := aptsource.FetchKey(ctx, src, p, hc, dest); err != nil {
+					diffs = append(diffs, preflight.Difference{Recipe: r.Name, Kind: preflight.FetchFailed, Detail: fmt.Sprintf("apt 來源 %s 的金鑰：%v", src.File, err)})
+					continue
+				}
+				keys[aptKeyID(r.Name, src.File)] = dest
+			}
 		}
 		// 只對標了 unverified 的配方放行；其他配方即使帶了旗標也照常驗證。
 		f.AllowUnverified = r.Unverified && allowUnverified
@@ -371,10 +400,13 @@ func fetchAll(ctx context.Context, f *fetch.Fetcher, up *upstream.Client, st sta
 	}
 	// 使用者中斷不是差異，是操作錯誤；不然會被當成「下載失敗」誤導使用者去查網路。
 	if err := ctx.Err(); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return plans, artifacts, diffs, nil
+	return plans, artifacts, keys, diffs, nil
 }
+
+// aptKeyID 是第 3 步預抓的金鑰在 keys 裡的鍵。
+func aptKeyID(recipeName, file string) string { return recipeName + "/" + file }
 
 // usesAptSource 回報這個計畫是否要處理 apt_sources：要跑、至少宣告一筆，而且平台提供 apt。
 // 不提供 apt 的平台（例如 alpine）直接略過，不查衝突、不下載金鑰、不寫來源檔。
@@ -382,24 +414,41 @@ func usesAptSource(pl plan, p platform.Platform) bool {
 	return pl.action == state.Run && len(pl.r.AptSources) > 0 && p.Provides["apt"]
 }
 
-func prepareSources(ctx context.Context, hc *http.Client, sysroot string, p platform.Platform,
-	defs platform.Defs, plans []plan, idx pkgindex.Index,
+func prepareSources(ctx context.Context, out io.Writer, sysroot string, p platform.Platform,
+	defs platform.Defs, plans []plan, keys map[string]string, idx pkgindex.Index,
 ) error {
 	// 這次沒有任何要跑的配方需要套件，就不寫套件庫也不更新索引：
-	// 只下載執行檔的配方（例如 helm）不該替使用者改 /etc/apk/repositories，
+	// 只下載執行檔的配方（例如 helm）不該替使用者改 /etc/apk/repositories 或鏡像，
 	// 也不必多等一次 apt-get update。
 	if !needsPackages(plans, p) {
 		return nil
 	}
-	if hc == nil {
-		hc = http.DefaultClient
+	if out == nil {
+		out = io.Discard
+	}
+	// 順序：鏡像 → apt 設定 → 第三方來源。鏡像在前，第三方套件的相依才從同一個發行版來源解析。
+	if p.Provides["apt"] {
+		if m := defs.AptMirror(p); m != nil {
+			changed, err := aptsource.WriteMirror(sysroot, *m, p)
+			if err != nil {
+				return fmt.Errorf("寫 apt 鏡像：%w", err)
+			}
+			if changed {
+				fmt.Fprintf(out, "Info: apt 鏡像改為 %s（原來源備份成 .bk）\n", m.URIs)
+			}
+		}
+		if conf := defs.AptConf(p); len(conf) > 0 {
+			if _, err := aptsource.WriteConf(sysroot, conf); err != nil {
+				return fmt.Errorf("寫 apt 設定：%w", err)
+			}
+		}
 	}
 	for _, pl := range plans {
 		if !usesAptSource(pl, p) {
 			continue
 		}
 		for _, src := range pl.r.AptSources {
-			if err := aptsource.Write(ctx, sysroot, src, p, hc); err != nil {
+			if err := aptsource.Write(sysroot, src, p, keys[aptKeyID(pl.r.Name, src.File)]); err != nil {
 				return fmt.Errorf("配方 %s 寫 apt 來源 %s：%w", pl.r.Name, src.File, err)
 			}
 		}

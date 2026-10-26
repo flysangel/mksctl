@@ -13,6 +13,18 @@ import (
 type LayerDef struct {
 	Provides     []string `yaml:"provides"`
 	Repositories []string `yaml:"repositories"`
+	// AptMirror 是發行版自己的套件庫要改指向的鏡像。只在這次要裝 apt 套件時寫入，
+	// 只下載執行檔的安裝不該改使用者的來源。
+	AptMirror *AptMirror `yaml:"apt_mirror"`
+	// AptConf 的鍵是 /etc/apt/apt.conf.d/ 底下的檔名，值是檔案內容。寫入時機同 AptMirror。
+	AptConf map[string]string `yaml:"apt_conf"`
+}
+
+// AptMirror 描述發行版套件庫的鏡像（deb822 欄位）。Suites 每一項是樣板，可用 {{.Codename}}。
+type AptMirror struct {
+	URIs       string   `yaml:"uris"`
+	Suites     []string `yaml:"suites"`
+	Components string   `yaml:"components"`
 }
 
 // RuntimeCapabilities 是由執行環境決定、不寫在 platforms/*.yaml 的能力名稱。
@@ -41,6 +53,28 @@ func LoadDefs(fsys fs.FS) (Defs, error) {
 		defs[strings.TrimSuffix(path.Base(f), ".yaml")] = d
 	}
 	return defs, nil
+}
+
+// AptMirror 回傳最具體一層的鏡像設定；沒有任何一層設定時回 nil。
+// 取單一層而不合併：鏡像的欄位彼此相依（URI 與 suite 要對得上），混搭兩層會產出壞來源。
+func (d Defs) AptMirror(p Platform) *AptMirror {
+	for _, l := range p.Layers {
+		if m := d[l].AptMirror; m != nil {
+			return m
+		}
+	}
+	return nil
+}
+
+// AptConf 回傳最具體一層的 apt 設定；沒有任何一層設定時回 nil。
+// 跟 AptMirror 一樣取單一層，具體層才能整組取代通用層的設定。
+func (d Defs) AptConf(p Platform) map[string]string {
+	for _, l := range p.Layers {
+		if c := d[l].AptConf; c != nil {
+			return c
+		}
+	}
+	return nil
 }
 
 // Apply 回傳填好 HasExactLayer 與 Provides 的副本。

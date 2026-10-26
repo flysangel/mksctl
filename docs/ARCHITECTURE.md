@@ -68,9 +68,9 @@ bash 執行 <名稱>_install、<名稱>_verify
 | 0 | CLI 檢查 root | 否 |
 | 1 | 讀平台、排順序 | 否 |
 | 2 | 靜態檢查：缺平台檔、缺能力、參數名稱、`unverified` 未允許 | 否 |
-| 3 | 查最新版，下載並驗證到暫存目錄 | 否（暫存目錄結束時清掉） |
-| 4 | 偵測 apt 來源衝突 | 否 |
-| 5 | 寫套件來源（第三方 apt、alpine community 與 edge），更新套件索引。這次要跑的配方都沒有 `packages`、也沒有適用的 `apt_sources` 時，整步略過 | 是，唯一例外 |
+| 3 | 查最新版，下載並驗證到暫存目錄。`apt_sources` 的金鑰也在這一步下載到暫存目錄 | 否（暫存目錄結束時清掉） |
+| 4 | 偵測 apt 來源衝突：既有來源檔（含 `/etc/apt/sources.list`）的同 URI，以及同一次安裝裡兩個配方寫同一個 `file` | 否 |
+| 5 | 依序寫平台層的 apt 鏡像與 `apt_conf`、第三方 apt 來源（金鑰用第 3 步下載的檔）、alpine community 與 edge，再更新套件索引。這次要跑的配方都沒有 `packages`、也沒有適用的 `apt_sources` 時，整步略過 | 是，唯一例外 |
 | 6 | 問套件索引，確認套件名稱存在 | 否 |
 | 7 | 依序執行配方，每成功一個就存狀態檔 | 是 |
 
@@ -94,6 +94,8 @@ bash 執行 <名稱>_install、<名稱>_verify
 - 平台宣告 `provides`（能力），配方宣告 `requires`。`go test` 檢查每個 `requires` 都至少有一個平台提供。
 - runtime 能力 `init` 和 `kernel` 由執行環境決定，不由平台檔宣告。init 在跑時，服務啟用並啟動；沒有 init（Docker build）時只啟用。
 - `pkgmap.yaml` 用 `null` 表示該平台沒有這個套件。
+- 層檔可宣告 `apt_mirror`（發行版套件庫的鏡像，`suites` 可用 `{{.Codename}}`）與 `apt_conf`（`/etc/apt/apt.conf.d/` 的檔名對內容）。多層都有時取最具體的一層，不合併。目前只有 `ubuntu` 層有，值看 `platforms/ubuntu.yaml`。
+- 鏡像整檔取代 `/etc/apt/sources.list.d/ubuntu.sources`。第一次寫入前把原檔備份成 `ubuntu.sources.bk`，已有備份就不再備份。`/etc/apt/sources.list` 還有 `deb` 行時，備份成 `sources.list.bk` 後清空。
 
 ### 雜湊來源順序
 
@@ -131,6 +133,8 @@ GitHub 上游優先直連：版本號讀 `releases/latest` 的轉址，雜湊直
 | 沒有帶 `--allow-unverified` 不裝沒有雜湊來源的配方 | 完整性驗證不能被無聲繞過 | `internal/preflight` 的靜態檢查 |
 | 套件來源先寫、再查套件名稱 | 不先寫來源，就無法確認來源裡的套件查得到。代價是第 5 步會改機器 | `internal/install` 的測試 |
 | 第三方 apt 來源寫 deb822 `.sources`，欄位照抄官方文件 | 金鑰用 HTTPS 下載，不比對指紋。寫入前偵測同一 URI 的舊 `.list` 與金鑰衝突，有就停止。一個配方可宣告多筆，同一配方內 `file` 不得重複 | `internal/aptsource` 的測試；重複由 `internal/recipe` 的 `Validate` 擋 |
+| 不從 keyserver 抓 `NO_PUBKEY` 的金鑰 | 照 `NO_PUBKEY` 抓金鑰，等於信任任何能讓 apt 印出那個 key ID 的簽署者；抓下來另存一份 keyring，也會讓同一來源出現第二個 `Signed-By` 而起衝突。缺金鑰的來源一律寫成配方的 `apt_sources`。使用者決定 | 無程式擋 |
+| ubuntu 鏡像在平台層，只在要裝 apt 套件時寫 | 使用者決定用台灣鏡像並開 `-proposed`、`-backports`。只下載執行檔的安裝不改使用者的來源。鏡像用 http：容器沒有 ca-certificates 時，https 來源連 `apt-get update` 都做不了；完整性由 apt 驗 Release 簽章保證 | `internal/install` 的 `TestMirrorOnlyWhenPackagesNeeded` |
 | `apt_sources` 是否適用由平台能力決定 | 看有沒有 `apt` 能力，不看層名稱 | `internal/install` 的測試 |
 | 簽章公鑰釘在 `trust/keys/` | 從上游抓公鑰，等於信任能換掉檔案的人。代價是上游換金鑰要手動更新 | 無程式擋 |
 | sigstore 同時支援金鑰與 keyless | kube-linter 用 cosign 金鑰簽章，沒有憑證可比對 identity。兩者並存或皆無，載入時報錯 | `internal/recipe` 的 `Validate` |
@@ -148,7 +152,7 @@ GitHub 上游優先直連：版本號讀 `releases/latest` 的轉址，雜湊直
 - 離線時查最新版失敗，已安裝的配方也會被擋。這是「一律最新版」的直接後果。
 - VM 層的 `/repo` 唯讀只靠 guest 端 `mount -o ro`，guest root 可以 remount 成可寫。virtiofsd 1.10.0 沒有唯讀選項。
 - LXC 層是 privileged 容器，容器內 root 等於 host root。
-- 舊 provision 佈建過的機器，不保證能直接改跑 `mksctl`。第 4 步遇到舊 `.list` 衝突時停止並印出清除指令。
+- 舊 provision 佈建過的機器，不保證能直接改跑 `mksctl`。第 4 步遇到舊 `.list` 或 `/etc/apt/sources.list` 的衝突時停止並印出清除指令。
 - `base` 配方只覆寫自己的檔，不清空 `/mks`。儀表板的落地由計畫 3 處理。
 - 發版驗證的 attestation 路徑（`mksctl update`）在第一個 release 前沒有真實樣本驗過，只有 fixture 測試。
 - 取消時 runner 用 `Setpgid` 殺整個行程組。Windows 的 `killProc` 只殺主行程，計畫 4 處理。
