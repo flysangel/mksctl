@@ -1,1 +1,34 @@
-{}
+# pkgmap.yaml — 邏輯套件名稱對照表
+#
+# 格式：邏輯名稱 → { 平台層: [實際套件名稱] | null }
+#   [] 代表該平台不需要這個套件（沒有東西要裝）。
+#   null 代表該平台沒有這個套件（preflight 會擋下）。
+#   沒有登記的邏輯名稱，各平台都原樣當成套件名稱。
+# 平台層用 apk（alpine）與 apt（ubuntu）。
+
+# 兩個發行版同一概念、套件名稱不同
+openssh-client: { apt: [ssh] }
+p7zip: { apt: [p7zip-full] }
+gettext: { apt: [gettext-base] }
+netcat: { apk: [netcat-openbsd], apt: [ncat] }
+bind-tools: { apt: [dnsutils] }
+iputils: { apt: [inetutils-ping] }
+
+# 只有 alpine 需要（ubuntu 預設已含，或沒有對應套件）
+yq: { apt: [] }
+e2fsprogs: { apt: [] }
+grep: { apt: [] }
+util-linux: { apt: [] }
+coreutils: { apt: [] }
+findutils: { apt: [] }
+binutils: { apt: [] }
+procps: { apt: [] }
+open-vm-tools-guestinfo: { apt: [] }
+
+# 只有 ubuntu 需要（alpine 用 busybox 或沒有對應套件）
+software-properties-common: { apk: [] }
+rsyslog: { apk: [] }
+net-tools: { apk: [] }
+iproute2: { apk: [] }
+iftop: { apk: [] }
+traceroute: { apk: [], apt: [inetutils-traceroute] }

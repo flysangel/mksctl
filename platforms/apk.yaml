@@ -1,3 +1,7 @@
 provides:
   - apk
   - openrc
+# 版本相關的 community 在各版本層（例如 alpine-3.24.yaml）；edge 與版本無關，放這裡
+repositories:
+  - https://dl-cdn.alpinelinux.org/alpine/edge/main
+  - https://dl-cdn.alpinelinux.org/alpine/edge/community
