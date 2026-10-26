@@ -30,8 +30,9 @@ jobs:
           sudo -E apt-get update
           sudo -E apt-get install -y --no-install-recommends shellcheck
           echo "$(go env GOPATH)/bin" >>"${GITHUB_PATH}"
-      - name: task lint
-        run: task lint
+      # 文件檢查只在本機跑：文件引用個人規則檔 ~/.claude/rules，runner 上沒有
+      - name: task lint:code
+        run: task lint:code
       - name: task test
         run: task test
   smoke:

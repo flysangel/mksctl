@@ -14,10 +14,20 @@ tasks:
       - bash bin/doctor.sh
 
   lint:
-    desc: "[開發] 離線靜態檢查（四大文件、Taskfile、go vet、shellcheck、shfmt）"
+    desc: "[開發] 離線靜態檢查全部（文件檢查加程式檢查，內容看 lint:docs 與 lint:code）"
+    cmds:
+      - task: lint:docs
+      - task: lint:code
+
+  lint:docs:
+    desc: "[開發] 離線文件檢查（四大文件、Taskfile）。文件引用個人規則檔，只在本機跑"
     cmds:
       - python3 bin/check-docs.py
       - python3 bin/check-taskfile.py
+
+  lint:code:
+    desc: "[開發] 離線程式檢查（go vet、Windows 建置、shellcheck、shfmt）。CI 跑這個"
+    cmds:
       - go vet ./...
       - GOOS=windows go build ./...
       - |

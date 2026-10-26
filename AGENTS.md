@@ -75,7 +75,7 @@ feature 分支上新增或改的 workflow，不能用 `workflow_dispatch` 手動
 
 本 repo 的實測在本機跑，發版閘門在 Actions。以下各層全部通過才算完成：
 
-- L1：`task lint`。內容看 `Taskfile.yaml` 的 `lint`。
+- L1：`task lint`。內容看 `Taskfile.yaml` 的 `lint`。CI 只跑 `lint:code`，文件檢查 `lint:docs` 引用個人規則檔，只在本機跑。
 - L2：`task test`。含 `go test ./...` 與 `tests/` 底下的 shell 自我檢查。
 - L3：實測。改了任何配方、`platforms/`、`pkgmap.yaml` 或引擎，只跑你動到的配方：`task test:recipe -- <名稱>`。
 
