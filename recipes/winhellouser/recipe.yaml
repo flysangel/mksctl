@@ -1,0 +1,11 @@
+# winhellouser：actions 場地的 user 測試配方，只給 tests/windows/actions.ps1 用。Task 16 會和 winhello 一起刪。
+venue: actions
+scope: user
+requires:
+  - windows
+registry:
+  - key: HKCU\Software\mksctl-winhellouser
+    name: Installed
+    type: dword
+    value: 1
+    restore: delete
