@@ -10,7 +10,7 @@
   - `weekly.yml` 沒有在 Actions 跑過。workflow 要在 main 才能手動觸發，合併後第一件事是觸發一次。
   - `mksctl update` 的 attestation 驗證沒有真實 release 樣本，只有 fixture 測試。首次 release 後要實跑一次。
   - `pkg_install` 沒有在真機執行過（helm 與 kubelinter 走下載路徑）。
-- `tests/verified.conf` 的 lxc 與 vm 紀錄已過期（內容雜湊涵蓋 Go 原始碼，Task 13 之後的引擎修改讓它失效），`task check:verified` 會失敗。發版前要在本機重跑受影響配方。
+- `tests/verified.conf` 的 lxc 與 vm 紀錄已過期（內容雜湊涵蓋 Go 原始碼，引擎修改之後讓它失效），`task check:verified` 會失敗。發版前要在本機重跑受影響配方。
 - 還沒有 tag。
 
 ## 2. 進行中

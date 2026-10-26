@@ -20,7 +20,7 @@ mksctl 是 Go 寫的單一靜態執行檔，取代 `provision` 的 bash 腳本�
 - 不釘上游版本。配方一律裝最新版。
 - Windows 平台由計畫 4 實作，現在只有兩個接縫，見〈4. 設計取捨〉的「Windows 接縫」。
 
-支援平台：alpine 最新穩定版、ubuntu 24.04、ubuntu 26.04。
+支援的平台看 `platforms/`。
 
 ## 2. 目錄結構
 
@@ -111,7 +111,7 @@ GitHub 上游優先直連：版本號讀 `releases/latest` 的轉址，雜湊直
 - `release.yml` 在 Actions 的 runner 上直接跑三個場地，因為 `ubuntu-latest` 有 KVM。
 - lxc 與 vm 層通過後寫 `tests/verified.conf`。紀錄綁配方目錄、`platforms/`、`pkgmap.yaml` 與 Go 原始碼的內容雜湊，另有時效。檢查用 `task check:verified`，這是本機工具，發版 workflow 不用。
 - `weekly.yml` 每週排程，抓上游改版造成的失敗。
-- 發版順序：check → smoke → build → 產生 `checksums.txt` 與 attestation → release。附件是 `mksctl-linux-amd64`、`checksums.txt` 與 `install.sh`。
+- 發版順序：check → smoke → build → 產生 `checksums.txt` 與 attestation → release。附件清單看 `.github/workflows/release.yml`。
 
 ## 4. 設計取捨
 
@@ -120,7 +120,7 @@ GitHub 上游優先直連：版本號讀 `releases/latest` 的轉址，雜湊直
 | Go 寫 ctl，配方用 bash | 下載只能經 `mksctl`，配方保持可讀。代價是要建置並散布執行檔 | `TestNoSha256OutsideTrust` 與 `fetch` 介面；配方直接下載無程式擋 |
 | 程式碼裡沒有 sha256 | 反目標。雜湊來源是必填 | `internal/recipe/catalog_test.go` 的 `TestNoSha256OutsideTrust`，豁免 `tests/verified.conf` |
 | 一律裝最新版 | 不釘版本。壞版本寫進 `exclude`，發新 tag 才生效 | 無程式擋 |
-| 配方的函式不用 trap，每步明寫 `|| return 1` | 呼叫端可能把函式放在 `||` 左邊，`set -e` 會失效 | `internal/runner` 的測試 |
+| 配方的函式不用 trap，每步明寫 `\|\| return 1` | 呼叫端可能把函式放在 `\|\|` 左邊，`set -e` 會失效 | `internal/runner` 的測試 |
 | 指定版本只用 `--tag`，參數只用 `--set` | 環境變數經 `sudo` 會靜默消失 | 無程式擋 |
 | 沒有帶 `--allow-unverified` 不裝沒有雜湊來源的配方 | 完整性驗證不能被無聲繞過 | `internal/preflight` 的靜態檢查 |
 | 套件來源先寫、再查套件名稱 | 不先寫來源，就無法確認來源裡的套件查得到。代價是第 5 步會改機器 | `internal/install` 的測試 |

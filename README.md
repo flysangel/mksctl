@@ -30,7 +30,7 @@ bash /tmp/install.sh
 - `mksctl update`：更新到最新版。
 - `mksctl update --tag vX.Y.Z`：換到指定版本。
 
-支援平台是 alpine 最新穩定版、ubuntu 24.04 與 ubuntu 26.04，只出 amd64。
+支援的平台看 `platforms/`，只出 amd64。
 `mksctl list --platform <層>` 列出某個平台能裝的配方。
 
 沒有帳號層 hook 時，開發本 repo 要先跑 `git config core.hooksPath .githooks`。
@@ -39,19 +39,20 @@ bash /tmp/install.sh
 
 ```bash
 sudo mksctl install helm ntp
-mksctl check docker
+sudo mksctl check docker
 mksctl list --all
 mksctl status
 mksctl version
+sudo mksctl update
 ```
 
 | 子命令 | 做什麼 |
 |---|---|
-| `install <名稱>...` | 安裝配方。前置依賴自動處理，可以重跑 |
-| `check <名稱>...` | 只做安裝前檢查，不改機器 |
+| `install <名稱>...` | 需要 root。安裝配方。前置依賴自動處理，可以重跑 |
+| `check <名稱>...` | 需要 root。只做安裝前檢查，不改機器 |
 | `list` | 列出目前平台能裝的配方。`--all` 列出全部配方與它們的實測場地，`--platform <層>` 指定平台 |
 | `status` | 列出已裝配方的版本與時間 |
-| `update [--tag vX.Y.Z]` | 更新 `mksctl` 本身，並驗證 artifact attestation |
+| `update [--tag vX.Y.Z]` | 需要 root。更新 `mksctl` 本身，並驗證 artifact attestation |
 | `version` | 印出版本 |
 
 ### 2.1 參數

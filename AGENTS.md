@@ -71,22 +71,18 @@ virtiofsd 1.10.0 沒有唯讀選項。harness 只在 guest 內用 `mount -o ro` 
 
 feature 分支上新增或改的 workflow，不能用 `workflow_dispatch` 手動觸發。`release.yml` 因此也在推 `feat/**` 分支時觸發 check 與 smoke。build 與 release 只在 tag 上跑。
 
-### Actions 的 runner 要放行 lxcbr0
-
-docker 把 FORWARD 設成 DROP，lxc 層的容器就沒有網路。`.github/actions/setup-harness/action.yml` 已處理。改那個 action 時，lxc 與 vm 層都要在 Actions 上再跑一次。
-
 ## 4. 完成定義
 
 本 repo 的實測在本機跑，發版閘門在 Actions。以下各層全部通過才算完成：
 
-- L1：`task lint`。含 `bin/check-docs.py`、`bin/check-taskfile.py`、`go vet`、Windows 交叉編譯、shellcheck 與 shfmt。
+- L1：`task lint`。內容看 `Taskfile.yaml` 的 `lint`。
 - L2：`task test`。含 `go test ./...` 與 `tests/` 底下的 shell 自我檢查。
 - L3：實測。改了任何配方、`platforms/`、`pkgmap.yaml` 或引擎，只跑你動到的配方：`task test:recipe -- <名稱>`。
 
 判讀 `task test:recipe` 的輸出：
 
-- 每個平台、每個配方連跑兩次 `mksctl install`，兩次都要 exit 0 才是 `[OK]`。第二次驗證可以重跑。
-- 回 `77` 是 `[SKIP]`，表示這個場地驗不了。全部都 `[SKIP]` 時整體回 1。
+- 每個平台、每個配方連跑兩次 `mksctl install`。同一台機器第二次安裝也必須 exit 0，才是 `[OK]`。
+- `mksctl list --platform` 不含該配方時，harness 印 `[SKIP]`，表示這個平台不支援它。`[SKIP]` 不影響結束碼；全部都 `[SKIP]` 時整體回 1。
 - `[FAIL]` 代表真的壞了，或撞到外部因素。先讀失敗配方的註解。
 
 ### 改了哪類檔要多驗什麼
