@@ -23,9 +23,13 @@ listing="$(./dist/mksctl list --all)" || {
   exit 1
 }
 
+# 場地的預期配方數：跑完拿來和實際跑過的數量比對
+expected="$(awk -v v="${venue}" '$2 == v' <<<"${listing}" | wc -l)"
+
 ran=0
 failed=()
-while read -r name v _; do
+# 用 fd 3 讀清單：task test:recipe 會繼承 stdin，吃掉後面的配方行會讓配方少跑卻仍通過
+while read -r -u 3 name v _; do
   if [[ "${v}" != "${venue}" ]]; then
     continue
   fi
@@ -33,10 +37,14 @@ while read -r name v _; do
   echo "::group::${name}"
   task test:recipe -- "${name}" || failed+=("${name}")
   echo "::endgroup::"
-done <<<"${listing}"
+done 3<<<"${listing}"
 
 if ((ran == 0)); then
   echo "Error: ${venue} 層沒有任何配方可跑（場地名拼錯，或清單是空的）" >&2
+  exit 1
+fi
+if ((ran != expected)); then
+  echo "Error: ${venue} 層清單有 ${expected} 個配方，實際只跑了 ${ran} 個" >&2
   exit 1
 fi
 if ((${#failed[@]} > 0)); then
