@@ -23,6 +23,7 @@ import (
 	"github.com/flysangel/mksctl/internal/aptsource"
 	"github.com/flysangel/mksctl/internal/fetch"
 	"github.com/flysangel/mksctl/internal/identity"
+	"github.com/flysangel/mksctl/internal/paths"
 	"github.com/flysangel/mksctl/internal/pkgindex"
 	"github.com/flysangel/mksctl/internal/pkgmap"
 	"github.com/flysangel/mksctl/internal/platform"
@@ -32,6 +33,7 @@ import (
 	"github.com/flysangel/mksctl/internal/runner"
 	"github.com/flysangel/mksctl/internal/state"
 	"github.com/flysangel/mksctl/internal/upstream"
+	"github.com/flysangel/mksctl/internal/winreg"
 )
 
 // RunFileName 是交給配方子程序的執行資訊檔名，放在下載暫存目錄裡。
@@ -105,6 +107,12 @@ type Deps struct {
 	TrustedRoot root.TrustedMaterial
 	// LockWait 是等另一個 mksctl 放狀態檔鎖的上限。零值用 60 秒；測試縮短它。
 	LockWait time.Duration
+	// Registry 給 Windows 配方的 registry: 用。nil 時用 winreg.Default()：Windows 是真實登錄區，
+	// 其他平台是 nil（Linux 配方沒有 registry:，用不到）。
+	Registry winreg.Store
+	// Paths 決定狀態檔與下載暫存的位置。MachineState 是空字串時（測試與舊呼叫端），
+	// 兩份狀態檔都用 <sysroot>/var/lib/mksctl/state.json，暫存用 <sysroot>/var/cache/mksctl/fetch。
+	Paths paths.Set
 }
 
 // Options 是使用者這次的要求。
@@ -124,14 +132,20 @@ const stateLockWait = 60 * time.Second
 // lockStates 對每個狀態檔路徑各取一把鎖，回傳的函式依相反順序放鎖。
 // 寫成清單是為了 Windows 要鎖兩個狀態檔（機器層先、使用者層後）：
 // 所有行程都照同一個順序取鎖，才不會互相卡死。中途失敗時，已取到的鎖會先放掉。
-func lockStates(ctx context.Context, paths []string, wait time.Duration) (func(), error) {
+func lockStates(ctx context.Context, statePaths []string, wait time.Duration) (func(), error) {
 	var unlocks []func()
 	release := func() {
 		for i := len(unlocks) - 1; i >= 0; i-- {
 			unlocks[i]()
 		}
 	}
-	for _, p := range paths {
+	seen := map[string]bool{}
+	for _, p := range statePaths {
+		// Linux 的 machine 與 user 狀態檔是同一個檔；同一個行程對同一個檔鎖兩次會卡死自己。
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
 		u, err := state.Lock(ctx, p, wait)
 		if err != nil {
 			release()
@@ -155,23 +169,14 @@ type plan struct {
 // Run 照固定順序做完檢查再安裝。回傳值有三種：
 // 有差異時回 (diffs, nil)；操作錯誤回 (nil, err)；成功回 (nil, nil)。
 func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Difference, err error) {
-	sysroot := opt.Sysroot
-	if sysroot == "" {
-		sysroot = deps.Sysroot
-	}
-	if sysroot == "" {
-		sysroot = "/"
-	}
+	sysroot := resolveSysroot(deps, opt)
 
 	// 1. 讀平台、排順序。這一步只讀檔。
 	p, cat, defs, err := loadPlatform(deps, sysroot)
 	if err != nil {
 		return nil, err
 	}
-	if errs := recipe.Validate(cat, defs); len(errs) > 0 {
-		return nil, fmt.Errorf("配方目錄有錯：%w", errors.Join(errs...))
-	}
-	order, err := resolve.Order(cat, p, opt.Names)
+	order, err := orderRecipes(cat, defs, p, opt.Names)
 	if err != nil {
 		return nil, err
 	}
@@ -180,79 +185,13 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 		recipes[i] = cat[n]
 	}
 
-	// 2. 靜態檢查：不碰網路與系統。
-	if d := preflight.Static(preflight.StaticInput{
-		Platform: p, Recipes: recipes, Params: opt.Params, AllowUnverified: opt.AllowUnverified,
-		GOOS: deps.GOOS, Identity: deps.Identity,
-	}); len(d) > 0 {
-		return d, nil
+	// 2、3. 靜態檢查、取鎖、讀狀態檔、下載驗證。
+	pr, diffs, err := prepare(ctx, deps, opt, sysroot, p, recipes, false)
+	if err != nil || len(diffs) > 0 {
+		return diffs, err
 	}
-	if deps.Token == "" && deps.TokenFunc != nil {
-		deps.Token = deps.TokenFunc()
-	}
-
-	pm, trust, err := loadTables(deps.FS)
-	if err != nil {
-		return nil, err
-	}
-	statePath := filepath.Join(sysroot, StatePath)
-	// 取鎖要在讀狀態檔與任何下載、寫入之前：兩個同時跑的 mksctl 才不會各自下載、
-	// 再各自讀舊狀態檔後覆蓋對方。check 不寫任何東西，所以不取鎖。
-	// 鎖檔（<狀態檔>.lock，空檔）是「第 5 步前不改機器」這條承諾唯一的例外：
-	// 它不含設定，留著不影響機器行為，也不能先檢查完再鎖（那樣檢查本身就會與別人競爭）。
-	wait := deps.LockWait
-	if wait == 0 {
-		wait = stateLockWait
-	}
-	if !opt.CheckOnly {
-		unlock, err := lockStates(ctx, []string{statePath}, wait)
-		if err != nil {
-			return nil, err
-		}
-		defer unlock()
-	}
-	st, err := state.Load(statePath)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. 查最新版並下載驗證。暫存目錄不算改機器：結束時一定清掉。
-	fetchDir, cleanup, err := prepareFetchDir(deps.FetchDir, sysroot, opt.CheckOnly)
-	if err != nil {
-		return nil, err
-	}
-	defer cleanup()
-
-	up := &upstream.Client{HTTP: deps.HTTP, GitHubBase: deps.GitHubBase, GitHubAPIBase: deps.GitHubAPIBase, Token: deps.Token}
-	trustFS := deps.TrustFS
-	if trustFS == nil {
-		trustFS = deps.FS
-	}
-	tufDir := deps.TUFCacheDir
-	if opt.CheckOnly {
-		// check 承諾不寫任何東西，sigstore 的 TUF 快取也一樣：改放這次的暫存目錄，結束時一起清掉。
-		// 代價是 check 每次都從頭抓 TUF 中繼資料。
-		tufDir = filepath.Join(fetchDir, ".tuf-cache")
-	}
-	fetcher := &fetch.Fetcher{
-		Upstream: up, Trust: trust, Arch: deps.Arch,
-		TrustFS: trustFS, TUFCacheDir: tufDir, TrustedRoot: deps.TrustedRoot,
-	}
-	if fetcherHook != nil {
-		fetcherHook(fetcher)
-	}
-	hc := deps.HTTP
-	if hc == nil {
-		hc = http.DefaultClient
-	}
-	plans, artifacts, keys, diffs, err := fetchAll(ctx, fetcher, up, hc, p, st, recipes, fetchDir, opt.AllowUnverified)
-	if err != nil {
-		return nil, err
-	}
-	if len(diffs) > 0 {
-		preflight.Sort(diffs)
-		return diffs, nil
-	}
+	defer pr.close()
+	plans, keys, fetchDir := pr.plans, pr.keys, pr.fetchDir
 
 	// 4. 查 apt 來源衝突。這時還沒寫任何東西。
 	//    同一次安裝裡兩個配方寫同一個來源檔，後寫的會靜默蓋掉先寫的，所以也算衝突。
@@ -312,16 +251,144 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 			names[pl.r.Name] = pl.r.Packages
 		}
 	}
-	if d := preflight.Packages(ctx, idx, pm, p, names); len(d) > 0 {
+	if d := preflight.Packages(ctx, idx, pr.pm, p, names); len(d) > 0 {
 		return d, nil
 	}
 
 	// 7. 依序執行。每成功一個就存狀態檔，後面失敗時，重跑可從失敗的配方接著做。
 	runPath := filepath.Join(fetchDir, RunFileName)
-	if err := writeRunFile(runPath, RunFile{Artifacts: artifacts, Layers: p.Layers, PkgmapLayers: p.Layers}); err != nil {
+	if err := writeRunFile(runPath, RunFile{Artifacts: pr.artifacts, Layers: p.Layers, PkgmapLayers: p.Layers}); err != nil {
 		return nil, err
 	}
-	return nil, execute(ctx, deps, p, plans, opt.Params, runPath, st, statePath)
+	return nil, execute(ctx, deps, p, plans, opt.Params, runPath, fetchDir, pr.states, runner.ActInstall)
+}
+
+func resolveSysroot(deps Deps, opt Options) string {
+	sysroot := opt.Sysroot
+	if sysroot == "" {
+		sysroot = deps.Sysroot
+	}
+	if sysroot == "" {
+		sysroot = "/"
+	}
+	return sysroot
+}
+
+func orderRecipes(cat recipe.Catalog, defs platform.Defs, p platform.Platform, names []string) ([]string, error) {
+	if errs := recipe.Validate(cat, defs); len(errs) > 0 {
+		return nil, fmt.Errorf("配方目錄有錯：%w", errors.Join(errs...))
+	}
+	return resolve.Order(cat, p, names)
+}
+
+// prepared 是 Run 與 Restore 共用的第 2、3 步結果。close 放鎖並清掉暫存目錄。
+type prepared struct {
+	pm        pkgmap.Map
+	states    *stateSet
+	plans     []plan
+	artifacts map[string]string
+	keys      map[string]string
+	fetchDir  string
+	close     func()
+}
+
+// prepare 做第 2、3 步：靜態檢查、取鎖、讀狀態檔、查最新版並下載驗證。
+// 有差異時回 (nil, diffs, nil)，這時已取的鎖與暫存目錄都已收拾。
+// force 為 true 時（restore）每個配方都要執行，不因版本相同而略過。
+func prepare(ctx context.Context, deps Deps, opt Options, sysroot string, p platform.Platform,
+	recipes []recipe.Recipe, force bool,
+) (_ *prepared, diffs []preflight.Difference, err error) {
+	ss := newStateSet(deps, sysroot)
+
+	// 2. 靜態檢查：不碰網路與系統。
+	diffs = preflight.Static(preflight.StaticInput{
+		Platform: p, Recipes: recipes, Params: opt.Params, AllowUnverified: opt.AllowUnverified,
+		GOOS: deps.GOOS, Identity: deps.Identity,
+	})
+	diffs = append(diffs, ss.missingDiffs(recipes)...)
+	if len(diffs) > 0 {
+		preflight.Sort(diffs)
+		return nil, diffs, nil
+	}
+	if deps.Token == "" && deps.TokenFunc != nil {
+		deps.Token = deps.TokenFunc()
+	}
+
+	pm, trust, err := loadTables(deps.FS)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 取鎖要在讀狀態檔與任何下載、寫入之前：兩個同時跑的 mksctl 才不會各自下載、
+	// 再各自讀舊狀態檔後覆蓋對方。check 不寫任何東西，所以不取鎖。
+	// 鎖檔（<狀態檔>.lock，空檔）是「第 5 步前不改機器」這條承諾唯一的例外：
+	// 它不含設定，留著不影響機器行為，也不能先檢查完再鎖（那樣檢查本身就會與別人競爭）。
+	wait := deps.LockWait
+	if wait == 0 {
+		wait = stateLockWait
+	}
+	var closers []func()
+	closeAll := func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	}
+	defer func() {
+		if err != nil || len(diffs) > 0 {
+			closeAll()
+		}
+	}()
+	needed := ss.needed(recipes)
+	if !opt.CheckOnly {
+		unlock, err := lockStates(ctx, needed, wait)
+		if err != nil {
+			return nil, nil, err
+		}
+		closers = append(closers, unlock)
+	}
+	if err := ss.load(needed); err != nil {
+		return nil, nil, err
+	}
+
+	// 3. 查最新版並下載驗證。暫存目錄不算改機器：結束時一定清掉。
+	fetchDir, cleanup, err := prepareFetchDir(deps.FetchDir, ss.fetchRoot, opt.CheckOnly)
+	if err != nil {
+		return nil, nil, err
+	}
+	closers = append(closers, cleanup)
+
+	up := &upstream.Client{HTTP: deps.HTTP, GitHubBase: deps.GitHubBase, GitHubAPIBase: deps.GitHubAPIBase, Token: deps.Token}
+	trustFS := deps.TrustFS
+	if trustFS == nil {
+		trustFS = deps.FS
+	}
+	tufDir := deps.TUFCacheDir
+	if opt.CheckOnly {
+		// check 承諾不寫任何東西，sigstore 的 TUF 快取也一樣：改放這次的暫存目錄，結束時一起清掉。
+		// 代價是 check 每次都從頭抓 TUF 中繼資料。
+		tufDir = filepath.Join(fetchDir, ".tuf-cache")
+	}
+	fetcher := &fetch.Fetcher{
+		Upstream: up, Trust: trust, Arch: deps.Arch,
+		TrustFS: trustFS, TUFCacheDir: tufDir, TrustedRoot: deps.TrustedRoot,
+	}
+	if fetcherHook != nil {
+		fetcherHook(fetcher)
+	}
+	hc := deps.HTTP
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	plans, artifacts, keys, diffs, err := fetchAll(ctx, fetcher, up, hc, p, ss, recipes, fetchDir, opt.AllowUnverified, force)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(diffs) > 0 {
+		preflight.Sort(diffs)
+		return nil, diffs, nil
+	}
+	return &prepared{
+		pm: pm, states: ss, plans: plans, artifacts: artifacts, keys: keys, fetchDir: fetchDir, close: closeAll,
+	}, nil, nil
 }
 
 func loadPlatform(deps Deps, sysroot string) (platform.Platform, recipe.Catalog, platform.Defs, error) {
@@ -378,8 +445,9 @@ func loadTables(fsys fs.FS) (pkgmap.Map, fetch.TrustDB, error) {
 
 // prepareFetchDir 回傳暫存目錄與清理函式。指定的目錄只清內容、不刪本身，
 // 呼叫端可能要重用它；自己建的目錄整個刪掉。
+// base 是自建目錄的上層（見 Deps.Paths）。
 // checkOnly 時改用系統暫存目錄：check 承諾不改機器，連 sysroot 底下的快取目錄都不建。
-func prepareFetchDir(dir, sysroot string, checkOnly bool) (string, func(), error) {
+func prepareFetchDir(dir, base string, checkOnly bool) (string, func(), error) {
 	if dir == "" && checkOnly {
 		d, err := os.MkdirTemp("", "mksctl-check-*")
 		if err != nil {
@@ -388,7 +456,6 @@ func prepareFetchDir(dir, sysroot string, checkOnly bool) (string, func(), error
 		return d, func() { _ = os.RemoveAll(d) }, nil
 	}
 	if dir == "" {
-		base := filepath.Join(sysroot, "var/cache/mksctl/fetch")
 		if err := os.MkdirAll(base, 0o755); err != nil {
 			return "", nil, err
 		}
@@ -410,10 +477,11 @@ func prepareFetchDir(dir, sysroot string, checkOnly bool) (string, func(), error
 }
 
 // fetchAll 對每個配方決定版本與動作，並下載要執行的配方的 artifacts 與 apt 金鑰。
+// force 時一律執行（restore 用）。
 // 失敗全部收集成差異再一起回傳，使用者才能一次看到所有下載問題。
 // keys 的鍵是 aptKeyID 的結果，值是暫存目錄裡的金鑰檔。
 func fetchAll(ctx context.Context, f *fetch.Fetcher, up *upstream.Client, hc *http.Client, p platform.Platform,
-	st state.File, recipes []recipe.Recipe, fetchDir string, allowUnverified bool,
+	ss *stateSet, recipes []recipe.Recipe, fetchDir string, allowUnverified, force bool,
 ) (plans []plan, artifacts, keys map[string]string, diffs []preflight.Difference, err error) {
 	artifacts = map[string]string{}
 	keys = map[string]string{}
@@ -427,7 +495,10 @@ func fetchAll(ctx context.Context, f *fetch.Fetcher, up *upstream.Client, hc *ht
 			}
 			version = upstream.Effective(latest, r.Exclude)
 		}
-		act := state.Decide(st, r, version)
+		act := state.Run
+		if !force {
+			act = state.Decide(ss.file(r), r, version)
+		}
 		pl := plan{r: r, version: version, action: act}
 		plans = append(plans, pl)
 		if act == state.Skip {
@@ -564,8 +635,111 @@ func writeRunFile(path string, rf RunFile) error {
 	return os.WriteFile(path, append(b, '\n'), 0o600)
 }
 
+// stateSet 是這次用到的狀態檔。machine 與 user 配方各寫各的檔（Windows），
+// Linux 兩個路徑相同，等於只有一份。
+type stateSet struct {
+	machine, user string
+	// paths 未設定時（舊呼叫端）兩份都用 sysroot 底下的路徑。
+	fetchRoot string
+	// userMissing 表示 Paths 有給、但 UserState 是空的（LOCALAPPDATA 缺席）。
+	userMissing bool
+	files       map[string]state.File
+}
+
+func newStateSet(deps Deps, sysroot string) *stateSet {
+	ps := deps.Paths
+	if ps.MachineState == "" {
+		def := filepath.Join(sysroot, StatePath)
+		return &stateSet{machine: def, user: def, fetchRoot: filepath.Join(sysroot, "var/cache/mksctl/fetch"), files: map[string]state.File{}}
+	}
+	fr := ps.FetchRoot
+	if fr == "" {
+		fr = filepath.Join(sysroot, "var/cache/mksctl/fetch")
+	}
+	return &stateSet{machine: ps.MachineState, user: ps.UserState, fetchRoot: fr, userMissing: ps.UserState == "", files: map[string]state.File{}}
+}
+
+func (s *stateSet) pathFor(r recipe.Recipe) string {
+	if r.Scope == "user" {
+		return s.user
+	}
+	return s.machine
+}
+
+// missingDiffs 對 user 配方報差異：不知道使用者的狀態檔在哪，就不能裝，也不猜一個路徑。
+func (s *stateSet) missingDiffs(recipes []recipe.Recipe) []preflight.Difference {
+	if !s.userMissing {
+		return nil
+	}
+	var diffs []preflight.Difference
+	for _, r := range recipes {
+		if r.Scope == "user" {
+			diffs = append(diffs, preflight.Difference{Recipe: r.Name, Kind: preflight.NoUserProfile,
+				Detail: "環境變數 LOCALAPPDATA 是空的，找不到使用者的狀態檔位置；請以目標使用者身分正常登入後再跑"})
+		}
+	}
+	return diffs
+}
+
+// needed 回傳這些配方用到的狀態檔，machine 在前、不重複。所有行程照同一個順序取鎖，才不會互相卡死。
+func (s *stateSet) needed(recipes []recipe.Recipe) []string {
+	var m, u bool
+	for _, r := range recipes {
+		if r.Scope == "user" {
+			u = true
+		} else {
+			m = true
+		}
+	}
+	var out []string
+	if m {
+		out = append(out, s.machine)
+	}
+	if u && !slices.Contains(out, s.user) {
+		out = append(out, s.user)
+	}
+	return out
+}
+
+func (s *stateSet) load(paths []string) error {
+	for _, p := range paths {
+		f, err := state.Load(p)
+		if err != nil {
+			return err
+		}
+		s.files[p] = f
+	}
+	return nil
+}
+
+// file 回傳配方所屬的狀態檔。沒載入過（不會發生在正常流程）時給空檔，Decide 照樣能用。
+func (s *stateSet) file(r recipe.Recipe) state.File {
+	f, ok := s.files[s.pathFor(r)]
+	if !ok {
+		f = state.File{Recipes: map[string]state.Entry{}}
+		s.files[s.pathFor(r)] = f
+	}
+	return f
+}
+
+func (s *stateSet) save(r recipe.Recipe) error {
+	return s.file(r).Save(s.pathFor(r))
+}
+
+// 配方自有資料的暫存檔名，放在該配方的下載子目錄，結束時隨暫存目錄清掉。
+const (
+	stateInName  = ".state-in.json"
+	stateOutName = ".state-out.json"
+)
+
+// execute 依序執行配方。act 是 install 時，每成功一個就存狀態檔，後面失敗時，
+// 重跑可從失敗的配方接著做；restore 時每還原一個就刪掉它的紀錄。
+//
+// Windows 的 install：登錄值寫入 → 回讀 → recipe.ps1 → 收 MKSCTL_STATE_OUT → 存檔。
+// 登錄值先於腳本：腳本可以依賴宣告的值已就位。腳本失敗時不存檔，重跑會從頭再套用一次。
+// restore 的順序相反：腳本先（它可能要讀還沒還原的值），再還原登錄值。
 func execute(ctx context.Context, deps Deps, p platform.Platform, plans []plan, params map[string]string,
-	runPath string, st state.File, statePath string,
+	runPath, fetchDir string, ss *stateSet, act runner.Action,
 ) error {
 	if deps.Runner == nil {
 		return errors.New("install: 沒有設定 Runner")
@@ -595,7 +769,10 @@ func execute(ctx context.Context, deps Deps, p platform.Platform, plans []plan, 
 				env["MKSCTL_PARAM_"+k] = v
 			}
 		}
+		st := ss.file(r)
+		old := st.Recipes[r.Name]
 		rn := deps.Runner
+		outPath := ""
 		if p.ID == "windows" {
 			if !r.HasPs1 {
 				// 只有宣告式登錄值的配方沒有腳本，不經 runner。
@@ -603,16 +780,124 @@ func execute(ctx context.Context, deps Deps, p platform.Platform, plans []plan, 
 			} else if deps.PSRunner != nil {
 				rn = deps.PSRunner
 			}
+			var err error
+			if outPath, err = stateFiles(env, filepath.Join(fetchDir, r.Name), old.Data, act); err != nil {
+				return err
+			}
+		}
+		var reg winreg.Store
+		if len(r.Registry) > 0 {
+			if reg = deps.Registry; reg == nil {
+				reg = winreg.Default()
+			}
+			if reg == nil {
+				return fmt.Errorf("配方 %s 宣告了 registry，但這個平台沒有登錄區", r.Name)
+			}
+		}
+
+		if act == runner.ActRestore {
+			if rn != nil {
+				if err := rn.Run(ctx, p, r, env, runner.ActRestore); err != nil {
+					return err
+				}
+			}
+			if reg != nil {
+				res, err := winreg.Restore(reg, r.Registry)
+				printSkipped(out, r.Name, res)
+				if err != nil {
+					return fmt.Errorf("配方 %s 還原登錄值：%w", r.Name, err)
+				}
+				if err := winreg.VerifyRestored(reg, r.Registry); err != nil {
+					return fmt.Errorf("配方 %s 還原後回讀不符：%w", r.Name, err)
+				}
+			}
+			st.Delete(r.Name)
+			if err := ss.save(r); err != nil {
+				return fmt.Errorf("配方 %s 已還原，但寫狀態檔失敗：%w", r.Name, err)
+			}
+			continue
+		}
+
+		if reg != nil {
+			res, err := winreg.Apply(reg, r.Registry)
+			printSkipped(out, r.Name, res)
+			if err != nil {
+				return fmt.Errorf("配方 %s 寫登錄值：%w", r.Name, err)
+			}
+			if _, err := winreg.Verify(reg, r.Registry); err != nil {
+				return fmt.Errorf("配方 %s 登錄值回讀不符：%w", r.Name, err)
+			}
 		}
 		if rn != nil {
 			if err := rn.Run(ctx, p, r, env, runner.ActInstall); err != nil {
 				return err
 			}
 		}
-		st.Recipes[r.Name] = state.Entry{Version: pl.version, InstalledAt: now()}
-		if err := st.Save(statePath); err != nil {
+		data := old.Data
+		if outPath != "" {
+			d, ok, err := readStateOut(outPath)
+			if err != nil {
+				return fmt.Errorf("配方 %s：%w", r.Name, err)
+			}
+			if ok {
+				data = d
+			}
+		}
+		st.Recipes[r.Name] = state.Entry{Version: pl.version, InstalledAt: now(), Data: data}
+		if err := ss.save(r); err != nil {
 			return fmt.Errorf("配方 %s 已裝好，但寫狀態檔失敗：%w", r.Name, err)
 		}
 	}
 	return nil
+}
+
+// stateFiles 準備配方自有資料的暫存檔：有舊資料時寫進 MKSCTL_STATE_IN；
+// install 另給 MKSCTL_STATE_OUT 的路徑（先刪掉，才分得出配方這次有沒有寫）。回傳 OUT 路徑，restore 時為空。
+func stateFiles(env map[string]string, dir string, data []byte, act runner.Action) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if len(data) > 0 {
+		in := filepath.Join(dir, stateInName)
+		// 資料可能含帳號名之類的內容，只給自己讀。
+		if err := os.WriteFile(in, data, 0o600); err != nil {
+			return "", err
+		}
+		env["MKSCTL_STATE_IN"] = in
+	}
+	if act != runner.ActInstall {
+		return "", nil
+	}
+	outPath := filepath.Join(dir, stateOutName)
+	if err := os.Remove(outPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	env["MKSCTL_STATE_OUT"] = outPath
+	return outPath, nil
+}
+
+// readStateOut 讀配方寫的 MKSCTL_STATE_OUT。檔不存在回 ok == false（保留舊資料）；
+// 內容不是 JSON 物件時回錯誤：存進狀態檔後下次 Load 才發現，就太晚了。
+func readStateOut(path string) (json.RawMessage, bool, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return nil, false, fmt.Errorf("MKSCTL_STATE_OUT 的內容要是一個 JSON 物件：%w", err)
+	}
+	return json.RawMessage(b), true, nil
+}
+
+// printSkipped 印出因 only_if_key_exists 而略過的值。
+func printSkipped(out io.Writer, name string, res []winreg.Result) {
+	for _, x := range res {
+		if x.Skipped {
+			fmt.Fprintf(out, "Info: %s：%s 不存在，略過 %s\n", name, x.Key, x.Name)
+		}
+	}
 }

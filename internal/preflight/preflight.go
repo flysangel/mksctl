@@ -26,10 +26,11 @@ const (
 	FetchFailed       Kind = "fetch-failed"
 	AptSourceConflict Kind = "apt-source-conflict"
 	PackageNotFound   Kind = "package-not-found"
-	// 以下三種只在 GOOS == "windows" 時產生。
+	// 以下四種只在 Windows 產生。NoUserProfile 由 install 產生：LOCALAPPDATA 是空的，user 配方沒有狀態檔可寫。
 	NeedsElevation  Kind = "needs-elevation"
 	SystemUserScope Kind = "system-user-scope"
 	WrongPlatform   Kind = "wrong-platform"
+	NoUserProfile   Kind = "no-user-profile"
 )
 
 // Difference 是一項差異。Recipe 為空表示跟單一配方無關（例如平台檔、參數）。

@@ -19,11 +19,14 @@ import (
 	"time"
 
 	"github.com/flysangel/mksctl/internal/fetch"
+	"github.com/flysangel/mksctl/internal/identity"
+	"github.com/flysangel/mksctl/internal/paths"
 	"github.com/flysangel/mksctl/internal/platform"
 	"github.com/flysangel/mksctl/internal/preflight"
 	"github.com/flysangel/mksctl/internal/recipe"
 	"github.com/flysangel/mksctl/internal/runner"
 	"github.com/flysangel/mksctl/internal/state"
+	"github.com/flysangel/mksctl/internal/winreg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,10 +90,12 @@ type fakeRunner struct {
 	// files 記下執行當下各 artifact 檔的內容，證明檔案在配方執行時還在。
 	files map[string]string
 	fail  map[string]bool
+	acts  []runner.Action
 }
 
 func (r *fakeRunner) Run(_ context.Context, _ platform.Platform, rc recipe.Recipe, env map[string]string, act runner.Action) error {
 	r.calls = append(r.calls, rc.Name)
+	r.acts = append(r.acts, act)
 	r.envs[rc.Name] = env
 	if b, err := os.ReadFile(env["MKSCTL_RUN"]); err == nil {
 		var rf RunFile
@@ -802,4 +807,244 @@ func TestLegacyClearMessage(t *testing.T) {
 	require.Empty(t, diffs)
 	assert.Contains(t, fx.Stdout.String(), "Info: 已清空 /etc/apt/sources.list 的來源，原內容備份在 /etc/apt/sources.list.bk")
 	assert.FileExists(t, legacy+".bk")
+}
+
+// ---- Windows ----
+
+// winPs1 是有 install、verify、restore 三個函式的 recipe.ps1，Validate 才會過。
+const winPs1 = "function %[1]s_install {}\nfunction %[1]s_verify {}\nfunction %[1]s_restore {}\n"
+
+// winCatalog 是 Windows 測試用的配方；值是 recipe.yaml，鍵帶 + 的另有 recipe.ps1。
+var winCatalog = map[string]string{
+	"rega+": "venue: vm\nrequires: [windows]\nregistry:\n" +
+		"  - key: HKLM\\Software\\Mk\n    name: A\n    type: dword\n    value: 1\n    restore: delete\n",
+	"regonly": "venue: vm\nrequires: [windows]\nregistry:\n" +
+		"  - key: HKLM\\Software\\Mk\n    name: R\n    type: string\n    value: x\n    restore: {value: y}\n",
+	"onlyif": "venue: vm\nrequires: [windows]\nregistry:\n" +
+		"  - key: HKLM\\Software\\Absent\n    name: O\n    type: dword\n    value: 1\n    restore: delete\n    only_if_key_exists: true\n",
+	"ureg+": "venue: vm\nrequires: [windows]\nscope: user\nregistry:\n" +
+		"  - key: HKCU\\Software\\Mk\n    name: U\n    type: dword\n    value: 1\n    restore: delete\n",
+	"psonly+": "venue: vm\nrequires: [windows]\n",
+	"wa+":     "venue: vm\nrequires: [windows]\n",
+	"wb+":     "venue: vm\nrequires: [windows]\nneeds: [wa]\n",
+}
+
+// recStore 包住 MemStore，把每次寫入與讀取記進與 winRunner 共用的 log，用來斷言先後順序。
+type winregMem = winreg.MemStore
+
+func newMem() *winregMem { return winreg.NewMemStore() }
+
+type recStore struct {
+	*winregMem
+	log *[]string
+}
+
+func (s recStore) Get(key, name string) (string, any, bool, error) {
+	*s.log = append(*s.log, "get:"+name)
+	return s.winregMem.Get(key, name)
+}
+
+func (s recStore) Set(key, name, typ string, val any) error {
+	*s.log = append(*s.log, "set:"+name)
+	return s.winregMem.Set(key, name, typ, val)
+}
+
+func (s recStore) Delete(key, name string) error {
+	*s.log = append(*s.log, "delete:"+name)
+	return s.winregMem.Delete(key, name)
+}
+
+// winRunner 是 PSRunner 的替身：記下呼叫、執行當下 MKSCTL_STATE_IN 的內容，並可寫 MKSCTL_STATE_OUT。
+type winRunner struct {
+	log      *[]string
+	envs     map[string]map[string]string
+	stateIn  map[string]string // 執行當下讀到的 MKSCTL_STATE_IN 內容；沒有這個變數時不記
+	writeOut map[string]string
+	fail     map[string]bool
+	// probe 非 nil 時在每次執行中呼叫，用來確認鎖仍持有。
+	probe func()
+}
+
+func (r *winRunner) Run(_ context.Context, _ platform.Platform, rc recipe.Recipe, env map[string]string, act runner.Action) error {
+	*r.log = append(*r.log, "run:"+rc.Name+":"+string(act))
+	r.envs[rc.Name+":"+string(act)] = env
+	if p, ok := env["MKSCTL_STATE_IN"]; ok {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		r.stateIn[rc.Name+":"+string(act)] = string(b)
+	}
+	if out, ok := r.writeOut[rc.Name]; ok {
+		if err := os.WriteFile(env["MKSCTL_STATE_OUT"], []byte(out), 0o600); err != nil {
+			return err
+		}
+	}
+	if r.probe != nil {
+		r.probe()
+	}
+	if r.fail[rc.Name] {
+		return fmt.Errorf("配方 %s 執行失敗：exit status 1", rc.Name)
+	}
+	return nil
+}
+
+type winFixture struct {
+	*fixture
+	Log   *[]string
+	Store recStore
+	PS    *winRunner
+}
+
+func (w *winFixture) machine(t *testing.T) state.File {
+	t.Helper()
+	f, err := state.Load(w.Deps.Paths.MachineState)
+	require.NoError(t, err)
+	return f
+}
+
+func (w *winFixture) user(t *testing.T) state.File {
+	t.Helper()
+	f, err := state.Load(w.Deps.Paths.UserState)
+	require.NoError(t, err)
+	return f
+}
+
+// winDeps 在 Linux 上模擬一台 Windows（InstallationType Client、指定 build），以系統管理員執行。
+func winDeps(t *testing.T, build string) *winFixture {
+	t.Helper()
+	fx := fakeDeps(t, ubuntu2404)
+	fsys := fstest.MapFS{
+		"platforms/windows-11.yaml":     {Data: []byte("provides: []\n")},
+		"platforms/windows-client.yaml": {Data: []byte("provides: []\n")},
+		"platforms/windows.yaml":        {Data: []byte("provides: [windows, registry, powershell]\n")},
+		"pkgmap.yaml":                   {Data: []byte("{}\n")},
+		"trust/hashes.yaml":             {Data: []byte("{}\n")},
+	}
+	for key, y := range winCatalog {
+		name, ps1 := strings.CutSuffix(key, "+")
+		fsys["recipes/"+name+"/recipe.yaml"] = &fstest.MapFile{Data: []byte(y)}
+		if ps1 {
+			fsys["recipes/"+name+"/recipe.ps1"] = &fstest.MapFile{Data: []byte(fmt.Sprintf(winPs1, name))}
+		}
+	}
+	log := &[]string{}
+	w := &winFixture{
+		fixture: fx,
+		Log:     log,
+		Store:   recStore{winregMem: newMem(), log: log},
+		PS: &winRunner{log: log, envs: map[string]map[string]string{}, stateIn: map[string]string{},
+			writeOut: map[string]string{}, fail: map[string]bool{}},
+	}
+	win := t.TempDir()
+	fx.Deps.FS = fsys
+	fx.Deps.Detect = func(string) (platform.Platform, error) { return platform.WindowsPlatform("Client", build), nil }
+	fx.Deps.GOOS = "windows"
+	fx.Deps.Identity = identity.Identity{Elevated: true}
+	fx.Deps.Registry = w.Store
+	fx.Deps.PSRunner = w.PS
+	fx.Deps.FetchDir = ""
+	fx.Deps.Paths = paths.Set{
+		MachineState: filepath.Join(win, "ProgramData", "state.json"),
+		UserState:    filepath.Join(win, "LocalAppData", "state.json"),
+		FetchRoot:    filepath.Join(win, "fetch"),
+	}
+	return w
+}
+
+func TestWindowsInstallOrder(t *testing.T) {
+	w := winDeps(t, "26100")
+	diffs, err := Run(ctx, w.Deps, Options{Names: []string{"rega"}})
+	require.NoError(t, err)
+	require.Empty(t, diffs)
+	assert.Equal(t, []string{"set:A", "get:A", "run:rega:install"}, *w.Log)
+	assert.Contains(t, w.machine(t).Recipes, "rega")
+}
+
+// Windows 配方一律交給 PSRunner，不落到 bash 的 Runner。
+func TestWindowsUsesPSRunner(t *testing.T) {
+	w := winDeps(t, "26100")
+	_, err := Run(ctx, w.Deps, Options{Names: []string{"psonly"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"run:psonly:install"}, *w.Log)
+	assert.Empty(t, w.Runner.calls)
+}
+
+// 只有登錄值、沒有 recipe.ps1 的配方不經任何 runner，仍要記進狀態檔。
+func TestWindowsRegistryOnlySkipsRunner(t *testing.T) {
+	w := winDeps(t, "26100")
+	_, err := Run(ctx, w.Deps, Options{Names: []string{"regonly"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"set:R", "get:R"}, *w.Log)
+	assert.Empty(t, w.Runner.calls)
+	assert.Contains(t, w.machine(t).Recipes, "regonly")
+}
+
+func TestWindowsOnlyIfKeyExistsPrintsSkip(t *testing.T) {
+	w := winDeps(t, "26100")
+	_, err := Run(ctx, w.Deps, Options{Names: []string{"onlyif"}})
+	require.NoError(t, err)
+	assert.Empty(t, *w.Log, "鍵不存在就不寫也不讀值")
+	assert.Contains(t, w.Stdout.String(), `Info: onlyif：HKLM\Software\Absent 不存在，略過 O`)
+}
+
+// Review Focus 4：登錄值寫了、腳本失敗 → 不寫狀態檔；重跑時從頭再套用一次並成功。
+func TestWindowsScriptFailureNoState(t *testing.T) {
+	w := winDeps(t, "26100")
+	w.PS.fail["rega"] = true
+	_, err := Run(ctx, w.Deps, Options{Names: []string{"rega"}})
+	require.Error(t, err)
+	assert.NotContains(t, w.machine(t).Recipes, "rega")
+
+	w.PS.fail["rega"] = false
+	*w.Log = nil
+	_, err = Run(ctx, w.Deps, Options{Names: []string{"rega"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"set:A", "get:A", "run:rega:install"}, *w.Log)
+	assert.Contains(t, w.machine(t).Recipes, "rega")
+}
+
+// Review Focus 2：不在對照表的 build，寫任何登錄值之前停下。
+func TestUnknownBuildTouchesNothing(t *testing.T) {
+	w := winDeps(t, "27000")
+	diffs, err := Run(ctx, w.Deps, Options{Names: []string{"rega"}})
+	require.NoError(t, err)
+	require.NotEmpty(t, diffs)
+	assert.Equal(t, preflight.NoExactPlatform, diffs[0].Kind)
+	assert.Equal(t, "windows-client-27000", diffs[0].Detail)
+	assert.Empty(t, *w.Log, "不能寫登錄值，也不能跑腳本")
+	assert.NoFileExists(t, w.Deps.Paths.MachineState)
+	assert.NoDirExists(t, w.Deps.Paths.FetchRoot)
+}
+
+// machine 與 user 配方混用時，各寫各的狀態檔。
+func TestWindowsStateByScope(t *testing.T) {
+	w := winDeps(t, "26100")
+	_, err := Run(ctx, w.Deps, Options{Names: []string{"rega", "ureg"}})
+	require.NoError(t, err)
+	m, u := w.machine(t), w.user(t)
+	assert.Contains(t, m.Recipes, "rega")
+	assert.NotContains(t, m.Recipes, "ureg")
+	assert.Contains(t, u.Recipes, "ureg")
+	assert.NotContains(t, u.Recipes, "rega")
+}
+
+// 沒有 LOCALAPPDATA 時 UserState 是空的：user 配方列為差異，什麼都不寫。
+func TestWindowsUserStateMissing(t *testing.T) {
+	w := winDeps(t, "26100")
+	w.Deps.Paths.UserState = ""
+	diffs, err := Run(ctx, w.Deps, Options{Names: []string{"rega", "ureg"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ureg/no-user-profile"}, kinds(diffs))
+	assert.Empty(t, *w.Log)
+	assert.NoFileExists(t, w.Deps.Paths.MachineState)
+}
+
+// 配方寫進 MKSCTL_STATE_OUT 的內容不是 JSON 物件時，整個配方算失敗，不寫狀態檔。
+func TestWindowsStateOutMustBeObject(t *testing.T) {
+	w := winDeps(t, "26100")
+	w.PS.writeOut["psonly"] = `["not","object"]`
+	_, err := Run(ctx, w.Deps, Options{Names: []string{"psonly"}})
+	require.ErrorContains(t, err, "MKSCTL_STATE_OUT")
+	assert.NotContains(t, w.machine(t).Recipes, "psonly")
 }
