@@ -15,6 +15,10 @@ type LayerDef struct {
 	Repositories []string `yaml:"repositories"`
 }
 
+// RuntimeCapabilities 是由執行環境決定、不寫在 platforms/*.yaml 的能力名稱。
+// 配方驗證把它們視為一定有平台提供。
+var RuntimeCapabilities = []string{"init", "kernel"}
+
 // Defs 以層名為鍵。
 type Defs map[string]LayerDef
 
@@ -53,12 +57,12 @@ func (d Defs) Apply(p Platform) Platform {
 			p.Provides[c] = true
 		}
 	}
-	// init 與 kernel 取決於執行環境，不由層定義。容器共用 host kernel，所以不提供 kernel。
-	if p.InitRunning {
-		p.Provides["init"] = true
-	}
-	if !p.InContainer {
-		p.Provides["kernel"] = true
+	// RuntimeCapabilities 取決於執行環境，不由層定義。容器共用 host kernel，所以不提供 kernel。
+	runtime := map[string]bool{"init": p.InitRunning, "kernel": !p.InContainer}
+	for _, c := range RuntimeCapabilities {
+		if runtime[c] {
+			p.Provides[c] = true
+		}
 	}
 	return p
 }

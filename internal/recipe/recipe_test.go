@@ -57,3 +57,8 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "oops")
 }
+
+func TestValidateRuntimeCapabilitiesAlwaysProvided(t *testing.T) {
+	c := Catalog{"x": {Name: "x", Venue: "vm", Requires: []string{"kernel", "init"}}}
+	assert.Empty(t, Validate(c, platform.Defs{}))
+}

@@ -42,6 +42,9 @@ func Load(fsys fs.FS) (Catalog, error) {
 // Validate 回傳全部錯誤，不在第一個就停，讓作者一次看完。
 func Validate(c Catalog, defs platform.Defs) []error {
 	provided := map[string]bool{}
+	for _, p := range platform.RuntimeCapabilities {
+		provided[p] = true // 執行時才決定，定義檔看不到
+	}
 	for _, d := range defs {
 		for _, p := range d.Provides {
 			provided[p] = true
