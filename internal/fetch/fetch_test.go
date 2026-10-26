@@ -327,6 +327,24 @@ func TestGetSigstoreKeyless(t *testing.T) {
 	require.ErrorIs(t, f.verifySigstore(context.Background(), bundle, digest, cosignSpec), ErrUnverified)
 }
 
+// 信任根拿掉 ctlogs 後，keyless 驗不了 SCT 就要失敗：證明 keyless 有要求 SCT，
+// 不是只看透明紀錄與時間戳。
+func TestGetSigstoreKeylessRequiresSCT(t *testing.T) {
+	bundle, digest := readFixture(t, "cosign-linux-amd64")
+	raw, err := os.ReadFile("testdata/trusted_root.json")
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	require.Contains(t, m, "ctlogs")
+	delete(m, "ctlogs")
+	raw, err = json.Marshal(m)
+	require.NoError(t, err)
+	tr, err := root.NewTrustedRootFromJSON(raw)
+	require.NoError(t, err)
+	f := &Fetcher{TrustedRoot: tr}
+	require.ErrorIs(t, f.verifySigstore(context.Background(), bundle, digest, cosignSpec), ErrUnverified)
+}
+
 func TestGetSigstoreFailureIsHardAndDeletes(t *testing.T) {
 	bundle, err := os.ReadFile("testdata/kube-linter-linux.sigstore.json")
 	require.NoError(t, err)

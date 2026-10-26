@@ -81,7 +81,7 @@ func (f *Fetcher) verifySigstore(ctx context.Context, bundleJSON, digest []byte,
 	}
 	// 透明紀錄與時間戳仍由 sigstore 信任根驗，公鑰只負責簽章。
 	tm = root.TrustedMaterialCollection{tm, km}
-	return verifyBundle(tm, bundleJSON, digest, verify.WithKey())
+	return verifyBundle(tm, bundleJSON, digest, verify.WithKey(), nil)
 }
 
 // VerifyKeyless 用 Fulcio 憑證的身分驗 bundle：identity 是 SAN 的正規表示式，issuer 是 OIDC 簽發者。
@@ -91,19 +91,25 @@ func VerifyKeyless(tm root.TrustedMaterial, bundleJSON, digest []byte, identity,
 	if err != nil {
 		return fmt.Errorf("%w：sigstore 身分設定：%v", ErrUnverified, err)
 	}
-	return verifyBundle(tm, bundleJSON, digest, verify.WithCertificateIdentity(id))
+	// keyless 另要求 Fulcio 憑證帶至少一筆 SCT（憑證透明度紀錄的簽章時間戳）：
+	// 沒有 SCT，就無法證明這張憑證有公開登記過，被偷簽的憑證也查不出來。
+	// 金鑰那條路沒有憑證，加這個選項 sigstore-go 會直接拒絕，所以只放在這裡。
+	return verifyBundle(tm, bundleJSON, digest, verify.WithCertificateIdentity(id),
+		[]verify.VerifierOption{verify.WithSignedCertificateTimestamps(1)})
 }
 
 // verifyBundle 是金鑰與 keyless 兩條路共用的驗證：要求透明紀錄與時間戳各至少一筆。
-func verifyBundle(tm root.TrustedMaterial, bundleJSON, digest []byte, idOpt verify.PolicyOption) error {
+// extra 是只有某一條路才要的驗證器選項。
+func verifyBundle(tm root.TrustedMaterial, bundleJSON, digest []byte, idOpt verify.PolicyOption, extra []verify.VerifierOption) error {
 	var b bundle.Bundle
 	if err := b.UnmarshalJSON(bundleJSON); err != nil {
 		return fmt.Errorf("%w：解析 sigstore bundle：%v", ErrUnverified, err)
 	}
-	v, err := verify.NewVerifier(tm,
+	opts := append([]verify.VerifierOption{
 		verify.WithTransparencyLog(1),
 		verify.WithObserverTimestamps(1),
-	)
+	}, extra...)
+	v, err := verify.NewVerifier(tm, opts...)
 	if err != nil {
 		return fmt.Errorf("%w：建立 sigstore 驗證器：%v", ErrUnverified, err)
 	}
