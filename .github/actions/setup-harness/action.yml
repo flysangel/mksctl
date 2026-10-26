@@ -28,7 +28,7 @@ runs:
           sudo -E apt-get update
           sudo -E apt-get install -y --no-install-recommends podman
         fi
-    - name: 裝 lxc-utils
+    - name: 裝 lxc
       if: inputs.venue == 'lxc'
       shell: bash
       env:
