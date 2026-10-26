@@ -5,25 +5,14 @@
 - 標準驗證路徑：`task lint`、`task test`、`task test:recipe -- <配方>`、`task check:verified`。
 - 計畫 1（垂直切片）功能完成：核心引擎、`install.sh` 與 `mksctl update`、`release.yml`、`weekly.yml`。
 - 第一批五個配方 base、helm、ntp、docker、kubelinter，在 alpine-3.24、ubuntu-24.04、ubuntu-26.04 三個平台都實測 `[OK]`，每個場地連跑兩次 `mksctl install` 都 exit 0。base、ntp、docker 走 `pkg_install`，helm 與 kubelinter 走下載路徑。
-- Actions 的 `release.yml` 在 `feat/slice` 上跑過，check 與 smoke（podman、lxc、vm）全綠；build 與 release 照設計只在 tag 上跑，所以是 skipped。實測：https://github.com/flysangel/mksctl/actions/runs/40313568150
+- Actions 的 `release.yml` 在 `feat/slice` 合併前的最後一個 commit 上跑過，check 與 smoke（podman、lxc、vm）全綠；build 與 release 照設計只在 tag 上跑，所以是 skipped。實測：https://github.com/flysangel/mksctl/actions/runs/40319610488
 - 未驗證：
   - `weekly.yml` 沒有在 Actions 跑過。workflow 要在 main 才能手動觸發，合併後第一件事是觸發一次。
   - `mksctl update` 的 attestation 驗證沒有真實 release 樣本，只有 fixture 測試。首次 release 後要實跑一次。
 - `tests/verified.conf` 的 lxc 與 vm 紀錄已過期（內容雜湊涵蓋 Go 原始碼，引擎修改之後讓它失效），`task check:verified` 會失敗。發版前要在本機重跑受影響配方。
 - 還沒有 tag。
 
-## 2. 進行中
-
-分支 `feat/slice`。
-
-做到哪：計畫 1 完成，final review 的修正已提交。
-
-下一步：merge 前收尾。
-
-1. 合併回 main，刪掉本節。
-2. 問使用者要不要 push；本計畫不打 tag。
-
-## 3. 待辦
+## 2. 待辦
 
 ### 計畫 2：其餘配方
 
