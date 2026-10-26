@@ -88,6 +88,8 @@ type Deps struct {
 	TrustFS     fs.FS
 	TUFCacheDir string
 	TrustedRoot root.TrustedMaterial
+	// LockWait 是等另一個 mksctl 放狀態檔鎖的上限。零值用 60 秒；測試縮短它。
+	LockWait time.Duration
 }
 
 // Options 是使用者這次的要求。
@@ -177,8 +179,14 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 	statePath := filepath.Join(sysroot, StatePath)
 	// 取鎖要在讀狀態檔與任何下載、寫入之前：兩個同時跑的 mksctl 才不會各自下載、
 	// 再各自讀舊狀態檔後覆蓋對方。check 不寫任何東西，所以不取鎖。
+	// 鎖檔（<狀態檔>.lock，空檔）是「第 5 步前不改機器」這條承諾唯一的例外：
+	// 它不含設定，留著不影響機器行為，也不能先檢查完再鎖（那樣檢查本身就會與別人競爭）。
+	wait := deps.LockWait
+	if wait == 0 {
+		wait = stateLockWait
+	}
 	if !opt.CheckOnly {
-		unlock, err := lockStates(ctx, []string{statePath}, stateLockWait)
+		unlock, err := lockStates(ctx, []string{statePath}, wait)
 		if err != nil {
 			return nil, err
 		}

@@ -105,6 +105,17 @@ func (c *Client) memo(ctx context.Context, key string, fn func() (string, error)
 	c.cache[key] = e
 	c.mu.Unlock()
 
+	// 用 defer：fn panic 時也要移除項目並 close，否則等待者永遠卡住、之後的呼叫者拿到壞項目。
+	defer func() {
+		if r := recover(); r != nil {
+			e.err = fmt.Errorf("upstream: 查詢 panic：%v", r)
+			c.mu.Lock()
+			delete(c.cache, key)
+			c.mu.Unlock()
+			close(e.done)
+			panic(r)
+		}
+	}()
 	e.value, e.err = fn()
 	if e.err != nil {
 		// 先移除再 close：close 之後醒來的呼叫者若再呼叫，一定看不到失敗的項目。

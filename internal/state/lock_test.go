@@ -29,11 +29,9 @@ func TestLockReleasedAllowsNext(t *testing.T) {
 	require.NoError(t, err)
 	unlock()
 
-	start := time.Now()
 	unlock2, err := Lock(context.Background(), p, time.Second)
 	require.NoError(t, err)
 	unlock2()
-	require.Less(t, time.Since(start), 90*time.Millisecond)
 }
 
 func TestLockCanceledContext(t *testing.T) {

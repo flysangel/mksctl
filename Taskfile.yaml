@@ -30,8 +30,9 @@ tasks:
     cmds:
       - go vet ./...
       - |
-        # gofmt -l 只列出沒排版的檔，自己不會失敗，所以要檢查輸出
-        unformatted="$(gofmt -l .)"
+        # gofmt -l 只列出沒排版的檔，自己不會失敗，所以要檢查輸出。
+        # 只掃 git 追蹤的檔：.claude/worktrees/ 裡有別的分支的 checkout，不該算進來。
+        unformatted="$(git ls-files -z '*.go' | xargs -0 -r gofmt -l)"
         if [[ -n "${unformatted}" ]]; then
           echo "Error: 以下檔案沒有 gofmt 排版（修法：gofmt -w <檔案>）：" >&2
           echo "${unformatted}" >&2
