@@ -22,6 +22,7 @@ import (
 	"github.com/flysangel/mksctl/internal/apkrepo"
 	"github.com/flysangel/mksctl/internal/aptsource"
 	"github.com/flysangel/mksctl/internal/fetch"
+	"github.com/flysangel/mksctl/internal/identity"
 	"github.com/flysangel/mksctl/internal/pkgindex"
 	"github.com/flysangel/mksctl/internal/pkgmap"
 	"github.com/flysangel/mksctl/internal/platform"
@@ -77,6 +78,14 @@ type Deps struct {
 	GitHubBase    string
 	GitHubAPIBase string
 	Token         string
+	// TokenFunc 非 nil 且 Token 為空時，在靜態檢查通過後才呼叫它取 token，
+	// 讓被身分檢查擋下的執行不必先讀機器上的檔。
+	TokenFunc func() string
+	// GOOS、Identity 交給 preflight.Static 做 Windows 身分檢查。GOOS 空字串視為非 Windows。
+	GOOS     string
+	Identity identity.Identity
+	// Detect 為 nil 時用 platform.Detect；測試換掉它，才能在 Linux 跑 Windows 流程。
+	Detect func(sysroot string) (platform.Platform, error)
 	// Index 為 nil 時用 pkgindex.For(平台)。
 	Index  pkgindex.Index
 	Runner Runner
@@ -174,8 +183,12 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 	// 2. 靜態檢查：不碰網路與系統。
 	if d := preflight.Static(preflight.StaticInput{
 		Platform: p, Recipes: recipes, Params: opt.Params, AllowUnverified: opt.AllowUnverified,
+		GOOS: deps.GOOS, Identity: deps.Identity,
 	}); len(d) > 0 {
 		return d, nil
+	}
+	if deps.Token == "" && deps.TokenFunc != nil {
+		deps.Token = deps.TokenFunc()
 	}
 
 	pm, trust, err := loadTables(deps.FS)
@@ -321,7 +334,11 @@ func loadPlatform(deps Deps, sysroot string) (platform.Platform, recipe.Catalog,
 			p.InitRunning, p.InContainer = platform.DetectRuntime(sysroot)
 		}
 	} else {
-		p, err = platform.Detect(sysroot)
+		detect := deps.Detect
+		if detect == nil {
+			detect = platform.Detect
+		}
+		p, err = detect(sysroot)
 	}
 	if err != nil {
 		return platform.Platform{}, nil, nil, err

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/flysangel/mksctl/internal/identity"
 	"github.com/flysangel/mksctl/internal/pkgindex"
 	"github.com/flysangel/mksctl/internal/pkgmap"
 	"github.com/flysangel/mksctl/internal/platform"
@@ -25,6 +26,10 @@ const (
 	FetchFailed       Kind = "fetch-failed"
 	AptSourceConflict Kind = "apt-source-conflict"
 	PackageNotFound   Kind = "package-not-found"
+	// 以下三種只在 GOOS == "windows" 時產生。
+	NeedsElevation  Kind = "needs-elevation"
+	SystemUserScope Kind = "system-user-scope"
+	WrongPlatform   Kind = "wrong-platform"
 )
 
 // Difference 是一項差異。Recipe 為空表示跟單一配方無關（例如平台檔、參數）。
@@ -40,6 +45,10 @@ type StaticInput struct {
 	Recipes         []recipe.Recipe
 	Params          map[string]string
 	AllowUnverified bool
+	// Identity 與 GOOS 只給 Windows 檢查用：身分由呼叫端取得，這裡不讀機器，
+	// 所以 SYSTEM 首開機的整批停止不需要碰任何機器上的檔。
+	Identity identity.Identity
+	GOOS     string
 }
 
 // Static 檢查平台檔、能力、參數與 unverified。
@@ -58,6 +67,9 @@ func Static(in StaticInput) []Difference {
 
 	declared := map[string]bool{}
 	for _, r := range in.Recipes {
+		if in.GOOS == "windows" {
+			diffs = append(diffs, windowsIdentity(in.Identity, r)...)
+		}
 		for _, req := range r.Requires {
 			if !p.Provides[req] {
 				diffs = append(diffs, Difference{Recipe: r.Name, Kind: MissingCapability, Detail: req})
@@ -138,4 +150,22 @@ func Sort(diffs []Difference) {
 		}
 		return diffs[i].Kind < diffs[j].Kind
 	})
+}
+
+// windowsIdentity 檢查一個配方在目前身分下能不能裝。
+// SYSTEM 的 HKCU 是 S-1-5-18 自己的 hive，寫了互動使用者吃不到，所以 user 配方一律擋。
+func windowsIdentity(id identity.Identity, r recipe.Recipe) []Difference {
+	if !r.HasPs1 && len(r.Registry) == 0 {
+		return []Difference{{Recipe: r.Name, Kind: WrongPlatform, Detail: "這個配方沒有 recipe.ps1 或 registry，不是 Windows 配方"}}
+	}
+	if r.Scope == "user" {
+		if id.System {
+			return []Difference{{Recipe: r.Name, Kind: SystemUserScope, Detail: "scope: user 的配方不能以 SYSTEM 執行；請以目標使用者身分登入後再跑"}}
+		}
+		return nil
+	}
+	if !id.Elevated {
+		return []Difference{{Recipe: r.Name, Kind: NeedsElevation, Detail: "machine 配方需要系統管理員權限；請用「以系統管理員身分執行」開啟終端機"}}
+	}
+	return nil
 }

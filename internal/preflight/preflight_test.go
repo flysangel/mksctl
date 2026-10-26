@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/flysangel/mksctl/internal/identity"
 	"github.com/flysangel/mksctl/internal/pkgmap"
 	"github.com/flysangel/mksctl/internal/platform"
 	"github.com/flysangel/mksctl/internal/recipe"
@@ -109,4 +110,55 @@ func TestPackages(t *testing.T) {
 		{Recipe: "a", Kind: PackageNotFound, Detail: "broken (查詢失敗：boom)"},
 		{Recipe: "b", Kind: PackageNotFound, Detail: "missing"},
 	}, diffs)
+}
+
+func winPlat() platform.Platform {
+	p := platform.WindowsPlatform("Client", "26100")
+	p.HasExactLayer = true
+	p.Provides = map[string]bool{"windows": true}
+	return p
+}
+
+func machineReg(name string) recipe.Recipe {
+	return recipe.Recipe{Name: name, Registry: []recipe.RegValue{{}}, HasPs1: true}
+}
+
+func userReg(name string) recipe.Recipe {
+	return recipe.Recipe{Name: name, Scope: "user", Registry: []recipe.RegValue{{}}}
+}
+
+func TestSystemWithUserScopeStopsAll(t *testing.T) {
+	d := Static(StaticInput{GOOS: "windows", Platform: winPlat(), Identity: identity.Identity{Elevated: true, System: true},
+		Recipes: []recipe.Recipe{machineReg("explorer"), userReg("explorerview")}})
+	if assert.Len(t, d, 1) {
+		assert.Equal(t, SystemUserScope, d[0].Kind)
+		assert.Equal(t, "explorerview", d[0].Recipe)
+	}
+}
+
+func TestNonElevatedMachineRecipe(t *testing.T) {
+	id := identity.Identity{}
+	d := Static(StaticInput{GOOS: "windows", Platform: winPlat(), Identity: id,
+		Recipes: []recipe.Recipe{machineReg("explorer"), userReg("explorerview")}})
+	if assert.Len(t, d, 1) {
+		assert.Equal(t, NeedsElevation, d[0].Kind)
+		assert.Equal(t, "explorer", d[0].Recipe)
+	}
+	// 只有 user 配方時，一般使用者沒有差異。
+	assert.Empty(t, Static(StaticInput{GOOS: "windows", Platform: winPlat(), Identity: id,
+		Recipes: []recipe.Recipe{userReg("explorerview")}}))
+}
+
+func TestLinuxRecipeOnWindows(t *testing.T) {
+	d := Static(StaticInput{GOOS: "windows", Platform: winPlat(), Identity: identity.Identity{Elevated: true},
+		Recipes: []recipe.Recipe{{Name: "helm", HasSh: true}}})
+	if assert.Len(t, d, 1) {
+		assert.Equal(t, WrongPlatform, d[0].Kind)
+		assert.Equal(t, "helm", d[0].Recipe)
+	}
+}
+
+func TestIdentityIgnoredOffWindows(t *testing.T) {
+	assert.Empty(t, Static(StaticInput{GOOS: "linux", Platform: exactPlatform(),
+		Recipes: []recipe.Recipe{{Name: "a", HasSh: true}}}))
 }

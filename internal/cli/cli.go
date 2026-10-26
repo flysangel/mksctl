@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -27,7 +28,9 @@ import (
 
 	"github.com/flysangel/mksctl"
 	"github.com/flysangel/mksctl/internal/fetch"
+	"github.com/flysangel/mksctl/internal/identity"
 	"github.com/flysangel/mksctl/internal/install"
+	"github.com/flysangel/mksctl/internal/paths"
 	"github.com/flysangel/mksctl/internal/pkgindex"
 	"github.com/flysangel/mksctl/internal/pkgmap"
 	"github.com/flysangel/mksctl/internal/platform"
@@ -50,9 +53,6 @@ const (
 	exitUsage = 2
 	exitDiffs = 3
 )
-
-// TokenPath 是 GitHub token 相對 sysroot 的路徑。
-const TokenPath = "etc/mksctl/github-token"
 
 // usageBody 是用法說明，不含前綴。依情境當首行訊息或縮排在 Error: 下方的 body。
 const usageBody = `usage: mksctl <install|check|list|status|update|version> ...
@@ -96,6 +96,37 @@ type env struct {
 	// selfPath 是 update 要換掉的檔，空字串時用正在跑的執行檔；verifier 為 nil 時走真的 sigstore。
 	selfPath string
 	verifier selfupdate.Verifier
+	// 以下四個為 nil 或空字串時用正式值；測試換掉它們，才能在 Linux 驗 Windows 的流程。
+	goos     string                                  // 空字串用 runtime.GOOS
+	identity func() identity.Identity                // nil 用 identity.Current
+	detect   func(string) (platform.Platform, error) // nil 用 platform.Detect
+	openFile func(string) (*os.File, error)          // nil 用 os.Open；cli 讀機器上的檔都走它
+}
+
+func (e env) targetOS() string {
+	if e.goos == "" {
+		return runtime.GOOS
+	}
+	return e.goos
+}
+
+func (e env) currentIdentity() identity.Identity {
+	if e.identity == nil {
+		return identity.Current()
+	}
+	return e.identity()
+}
+
+func (e env) open(name string) (*os.File, error) {
+	if e.openFile == nil {
+		return os.Open(name)
+	}
+	return e.openFile(name)
+}
+
+// paths 回傳這次執行的路徑。Windows 的 Elevated 影響暫存放哪裡，所以要帶身分。
+func (e env) paths() paths.Set {
+	return paths.For(e.targetOS(), e.sysroot, e.currentIdentity(), e.getenv)
 }
 
 func defaultEnv() env {
@@ -203,11 +234,15 @@ func run(e env, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 func (e env) upstream() *upstream.Client {
-	return &upstream.Client{HTTP: e.http, GitHubBase: e.githubBase, GitHubAPIBase: e.apiBase, Token: readToken(e.sysroot)}
+	return &upstream.Client{HTTP: e.http, GitHubBase: e.githubBase, GitHubAPIBase: e.apiBase, Token: e.readToken()}
 }
 
 // requireRoot 要在讀任何檔之前呼叫：非 root 時，後面的錯誤（例如讀不到狀態檔）只會誤導使用者。
+// Windows 不呼叫它：os.Geteuid 在 Windows 回 -1，身分改由 preflight.Static 依 scope 檢查。
 func requireRoot(e env) error {
+	if e.targetOS() == "windows" {
+		return nil
+	}
 	if e.geteuid() != 0 {
 		return &exitErr{code: exitError, msg: "需要 root 權限，改用 sudo 執行"}
 	}
@@ -215,8 +250,13 @@ func requireRoot(e env) error {
 }
 
 // readToken 讀 GitHub token。檔不存在或讀不到都回空字串：token 只用來避開限流，不是必要條件。
-func readToken(sysroot string) string {
-	b, err := os.ReadFile(filepath.Join(sysroot, TokenPath))
+func (e env) readToken() string {
+	f, err := e.open(e.paths().TokenFile)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	b, err := io.ReadAll(f)
 	if err != nil {
 		return ""
 	}
@@ -313,9 +353,10 @@ func cmdInstall(ctx context.Context, e env, sub string, args []string, stdin io.
 	}
 	deps := install.Deps{
 		FS: e.fsys, TrustFS: e.fsys, Sysroot: e.sysroot,
-		HTTP: e.http, GitHubBase: e.githubBase, GitHubAPIBase: e.apiBase, Token: readToken(e.sysroot),
+		HTTP: e.http, GitHubBase: e.githubBase, GitHubAPIBase: e.apiBase, TokenFunc: e.readToken,
 		Index: e.index, Runner: r, PSRunner: psr, Now: e.now, Stdout: stdout,
-		TUFCacheDir: filepath.Join(e.sysroot, "var/cache/mksctl/tuf"),
+		TUFCacheDir: e.paths().TUFCache,
+		GOOS:        e.targetOS(), Identity: e.currentIdentity(), Detect: e.detect,
 	}
 	diffs, err := install.Run(ctx, deps, install.Options{
 		Names: names, Params: params, AllowUnverified: *allow, Sysroot: e.sysroot, CheckOnly: checkOnly,
@@ -450,7 +491,7 @@ func cmdStatus(e env, args []string, stdout io.Writer) error {
 	if len(args) > 0 {
 		return usageErr("status 不收參數")
 	}
-	st, err := state.Load(filepath.Join(e.sysroot, install.StatePath))
+	st, err := state.Load(e.paths().MachineState)
 	if err != nil {
 		return err
 	}
@@ -574,7 +615,7 @@ func cmdUpdate(ctx context.Context, e env, args []string, stdout io.Writer) erro
 	}
 	v := e.verifier
 	if v == nil {
-		v = selfupdate.SigstoreVerifier{TUFCacheDir: filepath.Join(e.sysroot, "var/cache/mksctl/tuf")}
+		v = selfupdate.SigstoreVerifier{TUFCacheDir: e.paths().TUFCache}
 	}
 	u := &selfupdate.Updater{Client: e.upstream(), Verifier: v}
 	res, err := u.Update(ctx, *tag, e.version, dest)

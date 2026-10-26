@@ -17,6 +17,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/flysangel/mksctl/internal/identity"
 	"github.com/flysangel/mksctl/internal/install"
 	"github.com/flysangel/mksctl/internal/platform"
 	"github.com/flysangel/mksctl/internal/preflight"
@@ -170,6 +171,39 @@ func TestNotRootCheckedBeforeReadingFiles(t *testing.T) {
 	}
 }
 
+// winFS 是 Windows 身分測試用的嵌入 FS：explorerview 是 scope: user 的純登錄配方。
+var winFS = map[string]string{
+	"platforms/windows-11.yaml":     "provides: []\n",
+	"platforms/windows-client.yaml": "provides: [client-os]\n",
+	"platforms/windows.yaml":        "provides: [windows, registry, powershell]\n",
+	"pkgmap.yaml":                   "{}\n",
+	"trust/hashes.yaml":             "{}\n",
+	"recipes/explorerview/recipe.yaml": "venue: vm\nrequires: [windows]\nscope: user\nregistry:\n" +
+		"  - key: HKCU\\Software\\X\n    name: A\n    type: dword\n    value: 1\n    restore: delete\n",
+}
+
+func TestWindowsIdentityReadsNoMachineFile(t *testing.T) {
+	var opened []string
+	h := newHarness(t, withFS(winFS))
+	h.env.goos = "windows"
+	h.env.sysroot = filepath.Join(t.TempDir(), "不存在")
+	h.env.geteuid = func() int { return -1 } // Windows 的 os.Geteuid 回 -1，不能拿來判斷。
+	h.env.identity = func() identity.Identity { return identity.Identity{Elevated: true, System: true} }
+	h.env.detect = func(string) (platform.Platform, error) { return platform.WindowsPlatform("Client", "26100"), nil }
+	h.env.getenv = func(k string) string {
+		return map[string]string{"ProgramData": `C:\ProgramData`, "LOCALAPPDATA": `C:\L`}[k]
+	}
+	h.env.openFile = func(name string) (*os.File, error) {
+		opened = append(opened, name)
+		return os.Open(name)
+	}
+	code, _, errOut := h.run("install", "explorerview")
+	assert.Equal(t, 3, code, errOut)
+	assert.Contains(t, errOut, "system-user-scope")
+	assert.Contains(t, errOut, "explorerview")
+	assert.Empty(t, opened, "身分檢查前不該開任何機器上的檔")
+}
+
 func TestSetStdinFromTerminalFails(t *testing.T) {
 	code, _, errOut := runCLI(t, withTTYStdin(), "install", "xfce", "--set", "XRDP_PASSWD=-")
 	assert.Equal(t, 1, code)
@@ -262,7 +296,9 @@ func TestInstallTokenFromSysroot(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "etc/mksctl"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "etc/mksctl/github-token"), []byte(" tok\n"), 0o600))
-	assert.Equal(t, "tok", readToken(root))
+	e := newHarness(t).env
+	e.sysroot = root
+	assert.Equal(t, "tok", e.readToken())
 }
 
 func TestInstallQueriesUpstream(t *testing.T) {
@@ -278,7 +314,9 @@ func TestInstallQueriesUpstream(t *testing.T) {
 }
 
 func TestTokenAbsentIsEmpty(t *testing.T) {
-	assert.Equal(t, "", readToken(t.TempDir()))
+	e := newHarness(t).env
+	e.sysroot = t.TempDir()
+	assert.Equal(t, "", e.readToken())
 }
 
 func TestInstallNoNamesIsUsage(t *testing.T) {
