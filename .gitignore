@@ -1,0 +1,19 @@
+# build 產出
+dist/
+
+# 實測層的基底映像與 overlay 快取
+.cache/
+
+# worktree：開在 .claude/worktrees/
+/.claude/worktrees/
+
+# 過程文件：本機暫存，不進版控
+/docs/superpowers/
+
+# 機密：永不追蹤
+.env
+*.env
+!.env.example
+!*.env.example
+*.key
+*.pem
