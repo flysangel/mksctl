@@ -13,8 +13,7 @@ pkg_install() {
   names="$("${MKSCTL_BIN}" pkgname "$@")" || return 1
   # 套件名以空白分隔，要拆成多個參數
   read -r -a pkgs <<<"${names}"
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get install -y -o DPkg::Lock::Timeout=300 --no-install-recommends "${pkgs[@]}"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=300 --no-install-recommends "${pkgs[@]}"
 }
 
 # _svc_enable <服務> — systemd 開機啟用
