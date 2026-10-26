@@ -141,7 +141,7 @@ func defaultEnv() env {
 	return env{
 		geteuid:    os.Geteuid,
 		isTerminal: isTerminal,
-		getenv:     os.Getenv,
+		getenv:     folderEnv(os.Getenv),
 		sysroot:    sysroot,
 		now:        time.Now,
 		fsys:       mksctl.FS,
