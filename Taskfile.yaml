@@ -1,0 +1,41 @@
+version: "3"
+
+set: [errexit, nounset, pipefail]
+
+tasks:
+  default:
+    cmds:
+      - task --list-all
+    silent: true
+
+  doctor:
+    desc: "[開發] 檢查執行環境：命令存在與種類、core.hooksPath、pre-push 執行位元，不安裝"
+    cmds:
+      - bash bin/doctor.sh
+
+  lint:
+    desc: "[開發] 離線靜態檢查（四大文件、Taskfile、go vet、shellcheck、shfmt）"
+    cmds:
+      - python3 bin/check-docs.py
+      - python3 bin/check-taskfile.py
+      - go vet ./...
+      - |
+        # 目錄可能還沒建，只掃存在的
+        dirs=()
+        for d in bin tests platforms recipes; do
+          if [[ -d "${d}" ]]; then
+            dirs+=("${d}")
+          fi
+        done
+        find "${dirs[@]}" -name '*.sh' -type f -exec shellcheck -S warning {} +
+        shfmt -d -i 2 "${dirs[@]}"
+
+  test:
+    desc: "[開發] 離線單元測試"
+    cmds:
+      - go test ./...
+
+  build:
+    desc: "[開發] 建置靜態執行檔到 dist/mksctl"
+    cmds:
+      - CGO_ENABLED=0 go build -o dist/mksctl ./cmd/mksctl
