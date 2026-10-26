@@ -36,6 +36,8 @@ _vscode_setup_user() {
   # install -D 建立的上層目錄屬於 root，改回該帳號
   chown -R "${user}:${user}" "${home}/.config/Code" "${home}/.config/crossnote" "${home}/.vscode" || return 1
 
+  # extensions.txt 的 foxundermoon.shell-format@7.2.5 是刻意釘版本，沿用舊 provision 的釘版，理由待查
+  # （舊 provision 的 vscode.ext 與文件都沒寫理由）；其餘擴充套件不釘
   while IFS= read -r ext; do
     [[ -n "${ext}" ]] || continue
     su - "${user}" -s /bin/bash -c 'code --install-extension "$1" --force' _ "${ext}" >/dev/null 2>&1 ||
@@ -53,20 +55,26 @@ vscode_install() {
 
   for user_home in /home/*; do
     [[ -d "${user_home}" ]] || continue
+    # 非帳號目錄（例如 lost+found）略過
+    id -u "$(basename "${user_home}")" >/dev/null 2>&1 || continue
     _vscode_setup_user "$(basename "${user_home}")" || return 1
   done
 }
 
 vscode_verify() {
-  local fonts
+  local fonts code_path
 
-  command -v code >/dev/null || {
+  code_path="$(command -v code)" || {
     echo "Error: 找不到 code" >&2
     return 1
   }
-  # 真的 Microsoft apt build，不是 snap 墊片
-  dpkg -s code >/dev/null 2>&1 || {
-    echo "Error: code 不是 apt 套件（可能是 snap 墊片）" >&2
+  # 真的 Microsoft apt build，不是 snap 墊片：實體路徑不在 /snap/ 底下，且 dpkg 狀態是已安裝
+  [[ "$(readlink -f "${code_path}")" != /snap/* ]] || {
+    echo "Error: code 指向 snap（${code_path}）" >&2
+    return 1
+  }
+  [[ "$(dpkg-query -W -f='${Status}' code 2>/dev/null)" == "install ok installed" ]] || {
+    echo "Error: code 的 dpkg 狀態不是 install ok installed" >&2
     return 1
   }
   fonts="$(fc-list)" || return 1
