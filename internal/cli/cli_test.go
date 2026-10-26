@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"github.com/flysangel/mksctl/internal/platform"
 	"github.com/flysangel/mksctl/internal/preflight"
 	"github.com/flysangel/mksctl/internal/recipe"
+	"github.com/flysangel/mksctl/internal/runner"
 	"github.com/flysangel/mksctl/internal/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,7 +35,7 @@ type fakeRunner struct {
 	envs  map[string]map[string]string
 }
 
-func (r *fakeRunner) Run(_ context.Context, _ platform.Platform, rc recipe.Recipe, env map[string]string) error {
+func (r *fakeRunner) Run(_ context.Context, _ platform.Platform, rc recipe.Recipe, env map[string]string, act runner.Action) error {
 	r.calls = append(r.calls, rc.Name)
 	r.envs[rc.Name] = env
 	return nil
@@ -234,6 +236,26 @@ func TestInstallSuccess(t *testing.T) {
 	require.Equal(t, 0, code, errOut)
 	assert.Contains(t, out, "Success: 安裝完成：helm、sd\n")
 	assert.Equal(t, []string{"helm", "sd"}, h.runner.calls)
+}
+
+// failRunner 回一個包著子行程離開碼的 *exec.ExitError。
+type failRunner struct{ err error }
+
+func (r failRunner) Run(context.Context, platform.Platform, recipe.Recipe, map[string]string, runner.Action) error {
+	return r.err
+}
+
+// 配方的離開碼（例如 cloudbase-init 的重開機訊號 1001）不能原樣傳出，mksctl 一律回 1。
+// Linux 的離開碼只有 8 位元，所以用 42 代表；路徑與 1001 相同。
+func TestRecipeExitCodeNotPropagated(t *testing.T) {
+	cmdErr := exec.Command("sh", "-c", "exit 42").Run()
+	var ee *exec.ExitError
+	require.ErrorAs(t, cmdErr, &ee)
+	h := newHarness(t)
+	h.env.runner = failRunner{err: fmt.Errorf("配方 helm 執行失敗：%w", cmdErr)}
+	code, _, errOut := h.run("install", "helm")
+	assert.Equal(t, 1, code, errOut)
+	assert.True(t, strings.HasPrefix(errOut, "Error: "), errOut)
 }
 
 func TestInstallTokenFromSysroot(t *testing.T) {

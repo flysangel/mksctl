@@ -18,3 +18,8 @@ func configureProc(cmd *exec.Cmd) {
 func killProc(cmd *exec.Cmd) error {
 	return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 }
+
+// afterStart 與 afterWait 在 Unix 上不用做事：行程組在啟動時就設好了。
+func afterStart(cmd *exec.Cmd) error { return nil }
+
+func afterWait(cmd *exec.Cmd) {}

@@ -51,13 +51,17 @@ type RunFile struct {
 	PkgmapLayers []string `json:"pkgmap_layers"`
 }
 
-// Runner 執行一個配方。*runner.Runner 符合這個介面；測試換成假的。
+// Runner 執行一個配方。*runner.Runner 與 *runner.PSRunner 符合這個介面；測試換成假的。
+// act 決定做 install（含 verify）還是 restore。
 type Runner interface {
-	Run(ctx context.Context, p platform.Platform, r recipe.Recipe, env map[string]string) error
+	Run(ctx context.Context, p platform.Platform, r recipe.Recipe, env map[string]string, act runner.Action) error
 }
 
 // 編譯期確認正式的 runner 符合介面，簽章改了這裡就編不過。
-var _ Runner = (*runner.Runner)(nil)
+var (
+	_ Runner = (*runner.Runner)(nil)
+	_ Runner = (*runner.PSRunner)(nil)
+)
 
 // Deps 是 Run 用到的外部資源。全部可替換，測試才能不碰網路與真實系統。
 type Deps struct {
@@ -76,6 +80,8 @@ type Deps struct {
 	// Index 為 nil 時用 pkgindex.For(平台)。
 	Index  pkgindex.Index
 	Runner Runner
+	// PSRunner 執行 Windows 平台（p.ID == "windows"）的配方；nil 時退回 Runner。
+	PSRunner Runner
 	// Now 為 nil 時用 time.Now。
 	Now func() time.Time
 	// Stdout 收 Info 訊息；nil 時丟棄。
@@ -572,8 +578,19 @@ func execute(ctx context.Context, deps Deps, p platform.Platform, plans []plan, 
 				env["MKSCTL_PARAM_"+k] = v
 			}
 		}
-		if err := deps.Runner.Run(ctx, p, r, env); err != nil {
-			return err
+		rn := deps.Runner
+		if p.ID == "windows" {
+			if !r.HasPs1 {
+				// 只有宣告式登錄值的配方沒有腳本，不經 runner。
+				rn = nil
+			} else if deps.PSRunner != nil {
+				rn = deps.PSRunner
+			}
+		}
+		if rn != nil {
+			if err := rn.Run(ctx, p, r, env, runner.ActInstall); err != nil {
+				return err
+			}
 		}
 		st.Recipes[r.Name] = state.Entry{Version: pl.version, InstalledAt: now()}
 		if err := st.Save(statePath); err != nil {

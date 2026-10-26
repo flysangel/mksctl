@@ -28,7 +28,7 @@ func run(t *testing.T, fsys fstest.MapFS, layers []string, name string, env map[
 	t.Helper()
 	var out, errb bytes.Buffer
 	r := &Runner{FS: fsys, Bin: "/bin/false", Stdout: &out, Stderr: &errb}
-	err := r.Run(context.Background(), platform.Platform{Layers: layers}, recipe.Recipe{Name: name}, env)
+	err := r.Run(context.Background(), platform.Platform{Layers: layers}, recipe.Recipe{Name: name}, env, ActInstall)
 	return out.String(), errb.String(), err
 }
 
@@ -69,7 +69,7 @@ func TestRunEnvExportedAndQuoted(t *testing.T) {
 	var out bytes.Buffer
 	r := &Runner{FS: fsys, Bin: "/bin/false", Stdout: &out, Stderr: io.Discard}
 	p := platform.Platform{ID: "ubuntu", Version: "26.04", Codename: "resolute", Layers: []string{"common"}, InitRunning: true}
-	err := r.Run(context.Background(), p, recipe.Recipe{Name: "demo"}, map[string]string{"MKSCTL_PARAM_X": "a'b $c \"d\""})
+	err := r.Run(context.Background(), p, recipe.Recipe{Name: "demo"}, map[string]string{"MKSCTL_PARAM_X": "a'b $c \"d\""}, ActInstall)
 	require.NoError(t, err)
 	assert.Equal(t, "ubuntu|26.04|resolute|1|a'b $c \"d\"\n", out.String())
 }
@@ -107,7 +107,7 @@ func TestRunContextCancelKills(t *testing.T) {
 	defer cancel()
 	r := &Runner{FS: fsys, Bin: "/bin/false", Stdout: io.Discard, Stderr: io.Discard}
 	start := time.Now()
-	err := r.Run(ctx, platform.Platform{Layers: []string{"common"}}, recipe.Recipe{Name: "demo"}, nil)
+	err := r.Run(ctx, platform.Platform{Layers: []string{"common"}}, recipe.Recipe{Name: "demo"}, nil, ActInstall)
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second, "沒有殺整組行程時會卡到 sleep 結束")
 }
@@ -131,7 +131,7 @@ func TestCommonSvcEnable(t *testing.T) {
 	// init 是否在跑由平台決定（內建變數），不再靠 env 覆蓋。
 	var buf bytes.Buffer
 	r := &Runner{FS: fsys, Bin: "/bin/false", Stdout: &buf, Stderr: io.Discard}
-	require.NoError(t, r.Run(context.Background(), platform.Platform{Layers: layers, InitRunning: true}, recipe.Recipe{Name: "demo"}, nil))
+	require.NoError(t, r.Run(context.Background(), platform.Platform{Layers: layers, InitRunning: true}, recipe.Recipe{Name: "demo"}, nil, ActInstall))
 	assert.Equal(t, "enable foo\nstart foo\n", buf.String())
 }
 
@@ -139,7 +139,7 @@ func TestCommonFetchCallsBin(t *testing.T) {
 	fsys := demoFS(t, "demo_install() { fetch helm; }\ndemo_verify() { :; }\n")
 	var out bytes.Buffer
 	r := &Runner{FS: fsys, Bin: "/bin/echo", Stdout: &out, Stderr: io.Discard}
-	err := r.Run(context.Background(), platform.Platform{Layers: []string{"common"}}, recipe.Recipe{Name: "demo"}, nil)
+	err := r.Run(context.Background(), platform.Platform{Layers: []string{"common"}}, recipe.Recipe{Name: "demo"}, nil, ActInstall)
 	require.NoError(t, err)
 	assert.Equal(t, "fetch helm\n", out.String())
 }
@@ -160,7 +160,7 @@ func TestPkgInstallEmptyListSkipsManager(t *testing.T) {
 			fsys["platforms/"+lib+".sh"] = &fstest.MapFile{Data: b}
 			var out bytes.Buffer
 			r := &Runner{FS: fsys, Bin: bin, Stdout: &out, Stderr: io.Discard}
-			err = r.Run(context.Background(), platform.Platform{Layers: []string{lib, "common"}}, recipe.Recipe{Name: "demo"}, nil)
+			err = r.Run(context.Background(), platform.Platform{Layers: []string{lib, "common"}}, recipe.Recipe{Name: "demo"}, nil, ActInstall)
 			require.NoError(t, err)
 			assert.NotContains(t, out.String(), "MANAGER_CALLED")
 			assert.Contains(t, out.String(), "DONE")
@@ -197,7 +197,7 @@ func TestRunParamNotInScript(t *testing.T) {
 	fsys := demoFS(t, "demo_install() { :; }\ndemo_verify() { :; }\n")
 	r := &Runner{FS: fsys, Bin: "/bin/false", Stdout: io.Discard, Stderr: io.Discard, scriptHook: func(s string) { script = s }}
 	err := r.Run(context.Background(), platform.Platform{Layers: []string{"common"}}, recipe.Recipe{Name: "demo"},
-		map[string]string{"MKSCTL_PARAM_PW": secret})
+		map[string]string{"MKSCTL_PARAM_PW": secret}, ActInstall)
 	require.NoError(t, err)
 	require.NotEmpty(t, script)
 	assert.NotContains(t, script, "p@ss")
@@ -224,4 +224,23 @@ func TestRunRejectsBadEnvKey(t *testing.T) {
 	fsys := demoFS(t, "demo_install() { :; }\ndemo_verify() { :; }\n")
 	_, _, err := run(t, fsys, []string{"common"}, "demo", map[string]string{"BAD-KEY": "x"})
 	require.Error(t, err)
+}
+
+func TestBashRestoreWithoutFunctionFails(t *testing.T) {
+	fsys := demoFS(t, "echo TOPLEVEL_MARK\ndemo_install() { :; }\ndemo_verify() { :; }\n")
+	var out bytes.Buffer
+	r := &Runner{FS: fsys, Bin: "/bin/false", Stdout: &out, Stderr: io.Discard}
+	err := r.Run(context.Background(), platform.Platform{Layers: []string{"common"}}, recipe.Recipe{Name: "demo"}, nil, ActRestore)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "不支援 restore")
+	assert.NotContains(t, out.String(), "TOPLEVEL_MARK")
+}
+
+func TestBashRestoreCallsOnlyRestore(t *testing.T) {
+	fsys := demoFS(t, "demo_install() { echo INSTALL; }\ndemo_verify() { echo VERIFY; }\ndemo_restore() { echo RESTORE; }\n")
+	var out bytes.Buffer
+	r := &Runner{FS: fsys, Bin: "/bin/false", Stdout: &out, Stderr: io.Discard}
+	err := r.Run(context.Background(), platform.Platform{Layers: []string{"common"}}, recipe.Recipe{Name: "demo"}, nil, ActRestore)
+	require.NoError(t, err)
+	assert.Equal(t, "RESTORE\n", out.String())
 }

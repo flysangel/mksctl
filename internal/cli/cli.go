@@ -302,17 +302,19 @@ func cmdInstall(ctx context.Context, e env, sub string, args []string, stdin io.
 		fmt.Fprintln(stdout, "Info: 套件名稱要在寫入套件來源後才能檢查，check 不含這一項")
 	}
 	r := e.runner
+	var psr install.Runner
 	if r == nil {
 		bin, err := os.Executable()
 		if err != nil {
 			return fmt.Errorf("找不到 mksctl 自身路徑：%w", err)
 		}
 		r = &runner.Runner{FS: e.fsys, Bin: bin, Stdout: stdout, Stderr: stderr}
+		psr = &runner.PSRunner{FS: e.fsys, Bin: bin, Stdout: stdout, Stderr: stderr}
 	}
 	deps := install.Deps{
 		FS: e.fsys, TrustFS: e.fsys, Sysroot: e.sysroot,
 		HTTP: e.http, GitHubBase: e.githubBase, GitHubAPIBase: e.apiBase, Token: readToken(e.sysroot),
-		Index: e.index, Runner: r, Now: e.now, Stdout: stdout,
+		Index: e.index, Runner: r, PSRunner: psr, Now: e.now, Stdout: stdout,
 		TUFCacheDir: filepath.Join(e.sysroot, "var/cache/mksctl/tuf"),
 	}
 	diffs, err := install.Run(ctx, deps, install.Options{

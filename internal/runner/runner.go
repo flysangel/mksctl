@@ -18,6 +18,16 @@ import (
 	"github.com/flysangel/mksctl/internal/recipe"
 )
 
+// Action 是 runner 對配方做的事。
+type Action string
+
+const (
+	// ActInstall 呼叫 <名稱>_install 與 <名稱>_verify。
+	ActInstall Action = "install"
+	// ActRestore 只呼叫 <名稱>_restore。
+	ActRestore Action = "restore"
+)
+
 // Runner 執行配方。Bin 是 mksctl 自身路徑，配方用它呼叫 fetch。
 type Runner struct {
 	FS     fs.FS
@@ -37,10 +47,10 @@ func quote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// Run 依序 source 各層與配方，再呼叫 <名稱>_install、<名稱>_verify。
+// Run 依序 source 各層與配方，再依 act 呼叫 <名稱>_install、<名稱>_verify，或 <名稱>_restore。
 // env（含 --set 的參數與機密）只放進子行程環境變數，不寫進暫存腳本，
 // 也不進 argv，避免機密落在磁碟或 ps 看得到的地方。
-func (r *Runner) Run(ctx context.Context, p platform.Platform, rc recipe.Recipe, env map[string]string) error {
+func (r *Runner) Run(ctx context.Context, p platform.Platform, rc recipe.Recipe, env map[string]string, act Action) error {
 	recipeDir, err := os.MkdirTemp("", "mksctl-recipe-*")
 	if err != nil {
 		return err
@@ -68,7 +78,7 @@ func (r *Runner) Run(ctx context.Context, p platform.Platform, rc recipe.Recipe,
 		}
 	}
 
-	script, err := r.compose(p, rc.Name, vars)
+	script, err := r.compose(p, rc.Name, vars, act)
 	if err != nil {
 		return err
 	}
@@ -98,10 +108,24 @@ func (r *Runner) Run(ctx context.Context, p platform.Platform, rc recipe.Recipe,
 	configureProc(cmd)
 	cmd.Cancel = func() error { return killProc(cmd) }
 	cmd.WaitDelay = 2 * time.Second
-	if err := cmd.Run(); err != nil {
+	if err := runCmd(cmd); err != nil {
 		return fmt.Errorf("配方 %s 執行失敗：%w", rc.Name, err)
 	}
 	return nil
+}
+
+// runCmd 等於 cmd.Run，但在啟動後與結束後各留一個平台掛鉤（Windows 用來管 Job Object）。
+func runCmd(cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if err := afterStart(cmd); err != nil {
+		cmd.Wait()
+		return err
+	}
+	err := cmd.Wait()
+	afterWait(cmd)
+	return err
 }
 
 // mergeEnv 把 extra 接在 base 之後，並先濾掉 base 中同名的項目，
@@ -125,7 +149,7 @@ func mergeEnv(base []string, extra map[string]string) []string {
 	return out
 }
 
-func (r *Runner) compose(p platform.Platform, name string, vars map[string]string) (string, error) {
+func (r *Runner) compose(p platform.Platform, name string, vars map[string]string, act Action) (string, error) {
 	var b strings.Builder
 	b.WriteString("#!/bin/bash\nset -euo pipefail\n")
 
@@ -156,10 +180,17 @@ func (r *Runner) compose(p platform.Platform, name string, vars map[string]strin
 	if err != nil {
 		return "", fmt.Errorf("讀不到配方 %s：%w", name, err)
 	}
+	fns := []string{name + "_install", name + "_verify"}
+	if act == ActRestore {
+		fns = []string{name + "_restore"}
+	}
 	// 在 Go 端先檢查函式定義，確保缺函式時配方的頂層碼完全不會執行。
-	for _, fn := range []string{name + "_install", name + "_verify"} {
+	for _, fn := range fns {
 		re := regexp.MustCompile(`(?m)^\s*(function\s+)?` + regexp.QuoteMeta(fn) + `\s*(\(\s*\))?\s*\{`)
 		if !re.Match(data) {
+			if act == ActRestore {
+				return "", fmt.Errorf("配方 %s 不支援 restore", name)
+			}
 			return "", fmt.Errorf("配方缺少函式 %s", fn)
 		}
 	}
@@ -167,21 +198,25 @@ func (r *Runner) compose(p platform.Platform, name string, vars map[string]strin
 
 	// 第二道保險：頂層碼已跑過，只能擋住後面的呼叫。主要檢查在上面 Go 端，
 	// 在執行任何配方碼之前做。
-	for _, fn := range []string{name + "_install", name + "_verify"} {
+	for _, fn := range fns {
 		fmt.Fprintf(&b, "declare -F %[1]s >/dev/null || { echo %[2]s >&2; exit 1; }\n",
 			quote(fn), quote("Error: 配方缺少函式 "+fn))
 	}
-	fmt.Fprintf(&b, "%s_install\n%s_verify\n", name, name)
+	for _, fn := range fns {
+		fmt.Fprintf(&b, "%s\n", fn)
+	}
 	return b.String(), nil
 }
 
 // extractFiles 把 recipes/<名稱>/files/ 解到 dst；沒有附屬檔時 dst 維持空目錄。
-func (r *Runner) extractFiles(name, dst string) error {
+func (r *Runner) extractFiles(name, dst string) error { return extractFiles(r.FS, name, dst) }
+
+func extractFiles(fsys fs.FS, name, dst string) error {
 	root := "recipes/" + name + "/files"
-	if _, err := fs.Stat(r.FS, root); err != nil {
+	if _, err := fs.Stat(fsys, root); err != nil {
 		return nil
 	}
-	return fs.WalkDir(r.FS, root, func(p string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(fsys, root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -189,7 +224,7 @@ func (r *Runner) extractFiles(name, dst string) error {
 		if d.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
-		data, err := fs.ReadFile(r.FS, p)
+		data, err := fs.ReadFile(fsys, p)
 		if err != nil {
 			return err
 		}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/flysangel/mksctl/internal/platform"
 	"github.com/flysangel/mksctl/internal/recipe"
+	"github.com/flysangel/mksctl/internal/runner"
 	"github.com/flysangel/mksctl/internal/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,13 +74,13 @@ type lockProbeRunner struct {
 	probeErr  error
 }
 
-func (r *lockProbeRunner) Run(ctx context.Context, p platform.Platform, rc recipe.Recipe, env map[string]string) error {
+func (r *lockProbeRunner) Run(ctx context.Context, p platform.Platform, rc recipe.Recipe, env map[string]string, act runner.Action) error {
 	if u, err := state.Lock(ctx, r.statePath, 100*time.Millisecond); err != nil {
 		r.probeErr = err
 	} else {
 		u()
 	}
-	return r.fakeRunner.Run(ctx, p, rc, env)
+	return r.fakeRunner.Run(ctx, p, rc, env, act)
 }
 
 func TestLockHeldWhileExecuting(t *testing.T) {

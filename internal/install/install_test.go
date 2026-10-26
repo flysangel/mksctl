@@ -22,6 +22,7 @@ import (
 	"github.com/flysangel/mksctl/internal/platform"
 	"github.com/flysangel/mksctl/internal/preflight"
 	"github.com/flysangel/mksctl/internal/recipe"
+	"github.com/flysangel/mksctl/internal/runner"
 	"github.com/flysangel/mksctl/internal/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -88,7 +89,7 @@ type fakeRunner struct {
 	fail  map[string]bool
 }
 
-func (r *fakeRunner) Run(_ context.Context, _ platform.Platform, rc recipe.Recipe, env map[string]string) error {
+func (r *fakeRunner) Run(_ context.Context, _ platform.Platform, rc recipe.Recipe, env map[string]string, act runner.Action) error {
 	r.calls = append(r.calls, rc.Name)
 	r.envs[rc.Name] = env
 	if b, err := os.ReadFile(env["MKSCTL_RUN"]); err == nil {
