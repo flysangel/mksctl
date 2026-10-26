@@ -192,21 +192,23 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 
 	// 4. 查 apt 來源衝突。這時還沒寫任何東西。
 	for _, pl := range plans {
-		if pl.action == state.Run && pl.r.AptSource != nil && !p.Provides["apt"] && deps.Stdout != nil {
-			fmt.Fprintf(deps.Stdout, "Info: %s 的 apt_source 在這個平台不適用，略過\n", pl.r.Name)
+		if pl.action == state.Run && len(pl.r.AptSources) > 0 && !p.Provides["apt"] && deps.Stdout != nil {
+			fmt.Fprintf(deps.Stdout, "Info: %s 的 apt_sources 在這個平台不適用，略過\n", pl.r.Name)
 		}
 		if !usesAptSource(pl, p) {
 			continue
 		}
-		cs, err := aptsource.FindConflicts(sysroot, *pl.r.AptSource, p)
-		if err != nil {
-			return nil, err
-		}
-		for _, c := range cs {
-			diffs = append(diffs, preflight.Difference{
-				Recipe: pl.r.Name, Kind: preflight.AptSourceConflict,
-				Detail: fmt.Sprintf("%s：%s\nFix: %s", c.File, c.Reason, c.Fix),
-			})
+		for _, src := range pl.r.AptSources {
+			cs, err := aptsource.FindConflicts(sysroot, src, p)
+			if err != nil {
+				return nil, err
+			}
+			for _, c := range cs {
+				diffs = append(diffs, preflight.Difference{
+					Recipe: pl.r.Name, Kind: preflight.AptSourceConflict,
+					Detail: fmt.Sprintf("%s：%s\nFix: %s", c.File, c.Reason, c.Fix),
+				})
+			}
 		}
 	}
 	if len(diffs) > 0 {
@@ -374,10 +376,10 @@ func fetchAll(ctx context.Context, f *fetch.Fetcher, up *upstream.Client, st sta
 	return plans, artifacts, diffs, nil
 }
 
-// usesAptSource 回報這個計畫是否要處理 apt_source：要跑、有宣告，而且平台提供 apt。
+// usesAptSource 回報這個計畫是否要處理 apt_sources：要跑、至少宣告一筆，而且平台提供 apt。
 // 不提供 apt 的平台（例如 alpine）直接略過，不查衝突、不下載金鑰、不寫來源檔。
 func usesAptSource(pl plan, p platform.Platform) bool {
-	return pl.action == state.Run && pl.r.AptSource != nil && p.Provides["apt"]
+	return pl.action == state.Run && len(pl.r.AptSources) > 0 && p.Provides["apt"]
 }
 
 func prepareSources(ctx context.Context, hc *http.Client, sysroot string, p platform.Platform,
@@ -396,8 +398,10 @@ func prepareSources(ctx context.Context, hc *http.Client, sysroot string, p plat
 		if !usesAptSource(pl, p) {
 			continue
 		}
-		if err := aptsource.Write(ctx, sysroot, *pl.r.AptSource, p, hc); err != nil {
-			return fmt.Errorf("配方 %s 寫 apt 來源：%w", pl.r.Name, err)
+		for _, src := range pl.r.AptSources {
+			if err := aptsource.Write(ctx, sysroot, src, p, hc); err != nil {
+				return fmt.Errorf("配方 %s 寫 apt 來源 %s：%w", pl.r.Name, src.File, err)
+			}
 		}
 	}
 	var repos []string
@@ -422,7 +426,7 @@ func prepareSources(ctx context.Context, hc *http.Client, sysroot string, p plat
 }
 
 // needsPackages 回報這次是否有要跑的配方會用到套件：宣告了 packages，
-// 或宣告了在這個平台適用的 apt_source。
+// 或宣告了在這個平台適用的 apt_sources。
 func needsPackages(plans []plan, p platform.Platform) bool {
 	for _, pl := range plans {
 		if pl.action != state.Run {

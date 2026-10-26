@@ -1,6 +1,8 @@
 // Package recipe 載入並驗證 recipes/<名稱>/recipe.yaml 組成的配方目錄。
 package recipe
 
+import "github.com/flysangel/mksctl/internal/upstream"
+
 // Recipe 是一份配方。Name 取自目錄名，不是 YAML 欄位，避免兩處不一致。
 type Recipe struct {
 	Name string `yaml:"-"`
@@ -16,18 +18,17 @@ type Recipe struct {
 	Artifacts []Artifact        `yaml:"artifacts"`
 	Exclude   map[string]string `yaml:"exclude"`
 	// Unverified 明示此配方的下載沒有雜湊來源，由作者擔保。
-	Unverified bool       `yaml:"unverified"`
-	Venue      string     `yaml:"venue"`
-	AptSource  *AptSource `yaml:"apt_source"`
+	Unverified bool   `yaml:"unverified"`
+	Venue      string `yaml:"venue"`
+	// AptSources 是要加的第三方 apt 來源。用清單是因為有的配方要兩個來源（例如套件與它的相依）。
+	// 舊的單筆欄位 apt_source 不再接受：KnownFields 會報錯，不會被靜默忽略。
+	AptSources []AptSource `yaml:"apt_sources"`
 	// Versioned 由 Latest 推得（不是 YAML 欄位）：沒有 latest 的配方每次都執行。
 	Versioned bool `yaml:"-"`
 }
 
-// LatestSpec 的 GitHub 與 URL 擇一。
-type LatestSpec struct {
-	GitHub string `yaml:"github"` // owner/repo
-	URL    string `yaml:"url"`    // 回傳純文字版本號
-}
+// LatestSpec 的 GitHub、URL、Provider 三選一。型別定義在 upstream，理由見該處註解。
+type LatestSpec = upstream.LatestSpec
 
 // Artifact 是配方要下載的一個檔。URL 是含 {{.Version}}、{{.Arch}} 的樣板。
 type Artifact struct {
@@ -37,15 +38,18 @@ type Artifact struct {
 }
 
 // ChecksumSpec 列出雜湊來源，至少要有一種（除非配方標 unverified）。
+// 試的順序見 fetch.Fetcher.Get。
 type ChecksumSpec struct {
-	Sigstore     *SigstoreSpec `yaml:"sigstore"`
-	File         string        `yaml:"file"`
-	Trust        bool          `yaml:"trust"`
-	GitHubDigest bool          `yaml:"github_digest"`
+	Sigstore *SigstoreSpec `yaml:"sigstore"`
+	// Provider 是 upstream.Providers 裡的名稱，給在 API 裡公布雜湊的上游（例如 go.dev）。
+	Provider     string `yaml:"provider"`
+	File         string `yaml:"file"`
+	Trust        bool   `yaml:"trust"`
+	GitHubDigest bool   `yaml:"github_digest"`
 }
 
 func (c ChecksumSpec) any() bool {
-	return c.Sigstore != nil || c.File != "" || c.Trust || c.GitHubDigest
+	return c.Sigstore != nil || c.Provider != "" || c.File != "" || c.Trust || c.GitHubDigest
 }
 
 // SigstoreSpec 描述 sigstore 簽章驗證。Key 與 Identity/Issuer 擇一：

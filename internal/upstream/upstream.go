@@ -10,9 +10,16 @@ import (
 	"path"
 	"strings"
 	"sync"
-
-	"github.com/flysangel/mksctl/internal/recipe"
 )
+
+// LatestSpec 是配方 latest 欄位的內容，GitHub、URL、Provider 三選一。
+// 定義在這裡而不是 recipe：recipe.Validate 要查 Providers，recipe 得 import upstream；
+// 若 upstream 反過來 import recipe 就成了循環。recipe.LatestSpec 是這個型別的別名。
+type LatestSpec struct {
+	GitHub   string `yaml:"github"`   // owner/repo
+	URL      string `yaml:"url"`      // 回傳純文字版本號
+	Provider string `yaml:"provider"` // Providers 裡的名稱，給版本號要解析 JSON 或 HTML 的上游
+}
 
 // Client 查上游。測試用 httptest 覆寫兩個 base。
 type Client struct {
@@ -28,9 +35,9 @@ type Client struct {
 
 // entry 讓同時查同一個鍵的呼叫者共用一次請求，不必各打一次。
 type entry struct {
-	done    chan struct{}
-	version string
-	err     error
+	done  chan struct{}
+	value string // 版本號，或 provider 要共用的回應內文
+	err   error
 }
 
 // HTTPClient 回傳要用的 http.Client。沒設時用預設值。
@@ -57,19 +64,28 @@ func (c *Client) APIBase() string {
 	return "https://api.github.com"
 }
 
-// Latest 回傳最新版本字串。同一個 Client 對同一個 repo 或網址只查一次；
+// Latest 回傳最新版本字串。同一個 Client 對同一個 repo、網址或 provider 只查一次；
 // 查詢失敗也記住，同一輪安裝不重複打已知失敗的上游。
-func (c *Client) Latest(ctx context.Context, s recipe.LatestSpec) (string, error) {
-	var key string
+func (c *Client) Latest(ctx context.Context, s LatestSpec) (string, error) {
 	switch {
 	case s.GitHub != "":
-		key = "github:" + s.GitHub
+		return c.memo(ctx, "github:"+s.GitHub, func() (string, error) { return c.latestGitHub(ctx, s.GitHub) })
 	case s.URL != "":
-		key = "url:" + s.URL
+		return c.memo(ctx, "url:"+s.URL, func() (string, error) { return c.latestURL(ctx, s.URL) })
+	case s.Provider != "":
+		p, ok := Providers[s.Provider]
+		if !ok {
+			return "", fmt.Errorf("upstream: 沒有名為 %q 的 provider", s.Provider)
+		}
+		return c.memo(ctx, "provider:"+s.Provider, func() (string, error) { return p.Latest(ctx, c) })
 	default:
-		return "", errors.New("upstream: latest 沒有設 github 或 url")
+		return "", errors.New("upstream: latest 沒有設 github、url 或 provider")
 	}
+}
 
+// memo 讓同一個鍵只執行一次 fn，結果（含錯誤）給之後的呼叫者共用。
+// 同時到的呼叫者等第一個做完，不各自打一次上游。
+func (c *Client) memo(ctx context.Context, key string, fn func() (string, error)) (string, error) {
 	c.mu.Lock()
 	if c.cache == nil {
 		c.cache = map[string]*entry{}
@@ -78,7 +94,7 @@ func (c *Client) Latest(ctx context.Context, s recipe.LatestSpec) (string, error
 		c.mu.Unlock()
 		select {
 		case <-e.done:
-			return e.version, e.err
+			return e.value, e.err
 		case <-ctx.Done():
 			return "", ctx.Err()
 		}
@@ -87,13 +103,9 @@ func (c *Client) Latest(ctx context.Context, s recipe.LatestSpec) (string, error
 	c.cache[key] = e
 	c.mu.Unlock()
 
-	if s.GitHub != "" {
-		e.version, e.err = c.latestGitHub(ctx, s.GitHub)
-	} else {
-		e.version, e.err = c.latestURL(ctx, s.URL)
-	}
+	e.value, e.err = fn()
 	close(e.done)
-	return e.version, e.err
+	return e.value, e.err
 }
 
 // latestGitHub 讀 releases/latest 的轉址目標。走網頁而不走 API，

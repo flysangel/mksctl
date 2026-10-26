@@ -97,8 +97,15 @@ func render(name, text string, d tmplData) (string, error) {
 	return b.String(), nil
 }
 
-// Get 下載 a 到 Dir，依序試 Sigstore、File、Trust、GitHubDigest。
-// 第一個「有設定且適用」的來源決定成敗；失敗時刪掉下載檔，不留未驗證的檔給後續步驟誤用。
+// Get 下載 a 到 Dir，依序試：
+//  1. Sigstore：有設就適用。
+//  2. Provider：有設就適用。上游的 API 公布雜湊，和 File 同級，排在 File 前面。
+//  3. File：有設就適用。
+//  4. Trust：trust/hashes.yaml 有這個網址的紀錄才適用，沒有就往下。
+//  5. GitHubDigest：網址是 GitHub release 下載點才適用，只當備援。
+//
+// 第一個「有設定且適用」的來源決定成敗，不再往下試：作者寫了來源卻驗不過，代表檔案有問題，
+// 退到較弱的來源等於把強的驗證關掉。失敗時刪掉下載檔，不留未驗證的檔給後續步驟誤用。
 func (f *Fetcher) Get(ctx context.Context, a recipe.Artifact, version string) (Result, error) {
 	d := tmplData{Version: version, Arch: f.Arch}
 	if d.Arch == "" {
@@ -149,6 +156,18 @@ func (f *Fetcher) verify(ctx context.Context, c recipe.ChecksumSpec, d tmplData,
 		}
 		return f.verifySigstore(ctx, b, sum, *c.Sigstore)
 	}
+	if c.Provider != "" {
+		p, ok := upstream.Providers[c.Provider]
+		if !ok {
+			return fmt.Errorf("%w：沒有名為 %q 的 provider", ErrUnverified, c.Provider)
+		}
+		// 版本傳樣板的 Version，也就是 exclude 換過之後實際要裝的版本。
+		want, err := p.Checksum(ctx, f.up(), d.Version, name)
+		if err != nil {
+			return fmt.Errorf("%w：provider %s：%v", ErrUnverified, c.Provider, err)
+		}
+		return compare(want, got, ErrChecksumMismatch)
+	}
 	if c.File != "" {
 		fu, err := render("checksum.file", c.File, d)
 		if err != nil {
@@ -186,7 +205,7 @@ func (f *Fetcher) verify(ctx context.Context, c recipe.ChecksumSpec, d tmplData,
 
 // hasSource 回報是否設了任何雜湊來源。recipe 的同名判斷沒有匯出，這裡另寫一份。
 func hasSource(c recipe.ChecksumSpec) bool {
-	return c.Sigstore != nil || c.File != "" || c.Trust || c.GitHubDigest
+	return c.Sigstore != nil || c.Provider != "" || c.File != "" || c.Trust || c.GitHubDigest
 }
 
 func compare(want, got string, sentinel error) error {

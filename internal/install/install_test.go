@@ -168,13 +168,13 @@ artifacts:
       file: "%[1]s/missing/one.bin.sha256"
 `,
 	"broken2": `venue: podman
-apt_source:
-  file: broken2.sources
-  uris: "%[1]s/broken2"
-  suites: "{{.Codename}}"
-  components: main
-  signed_by: /etc/apt/keyrings/broken2.asc
-  key_url: "%[1]s/broken2.gpg"
+apt_sources:
+  - file: broken2.sources
+    uris: "%[1]s/broken2"
+    suites: "{{.Codename}}"
+    components: main
+    signed_by: /etc/apt/keyrings/broken2.asc
+    key_url: "%[1]s/broken2.gpg"
 artifacts:
   - id: two
     url: "%[1]s/missing/two.bin"
@@ -183,13 +183,28 @@ artifacts:
 `,
 	"docker": `venue: lxc
 packages: [docker-ce]
-apt_source:
-  file: docker.sources
-  uris: "%[1]s/docker"
-  suites: "{{.Codename}}"
-  components: stable
-  signed_by: /etc/apt/keyrings/docker.asc
-  key_url: "%[1]s/docker.gpg"
+apt_sources:
+  - file: docker.sources
+    uris: "%[1]s/docker"
+    suites: "{{.Codename}}"
+    components: stable
+    signed_by: /etc/apt/keyrings/docker.asc
+    key_url: "%[1]s/docker.gpg"
+`,
+	"multiapt": `venue: podman
+apt_sources:
+  - file: multi1.sources
+    uris: "%[1]s/multi1"
+    suites: "{{.Codename}}"
+    components: main
+    signed_by: /etc/apt/keyrings/multi1.asc
+    key_url: "%[1]s/multi1.gpg"
+  - file: multi2.sources
+    uris: "%[1]s/multi2"
+    suites: "{{.Codename}}"
+    components: main
+    signed_by: /etc/apt/keyrings/multi2.asc
+    key_url: "%[1]s/multi2.gpg"
 `,
 	"unv": `venue: podman
 unverified: true
@@ -236,7 +251,7 @@ func fakeDeps(t *testing.T, osRelease string) *fixture {
 			fmt.Fprint(w, "content:"+strings.TrimPrefix(p, "/dl/"))
 		case p == "/dl/unv.bin":
 			fmt.Fprint(w, "unverified-bytes")
-		case p == "/docker.gpg" || p == "/broken2.gpg":
+		case p == "/docker.gpg" || p == "/broken2.gpg" || p == "/multi1.gpg" || p == "/multi2.gpg":
 			fmt.Fprint(w, "KEY")
 		default:
 			http.NotFound(w, r)
@@ -594,5 +609,33 @@ func TestAlpineSkipsAptSource(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/keyrings"))
 	assert.False(t, fx.requested("/docker.gpg"), "不該對金鑰網址發請求")
 	assert.Equal(t, []string{"docker"}, fx.Runner.calls)
-	assert.Contains(t, fx.Stdout.String(), "Info: docker 的 apt_source 在這個平台不適用，略過")
+	assert.Contains(t, fx.Stdout.String(), "Info: docker 的 apt_sources 在這個平台不適用，略過")
+}
+
+// 一個配方宣告多個 apt 來源時，每一筆都要查衝突、下載金鑰並寫入。
+func TestInstallWritesEveryAptSource(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"multiapt"}})
+	require.NoError(t, err)
+	require.Empty(t, diffs)
+	for _, n := range []string{"multi1", "multi2"} {
+		assert.FileExists(t, filepath.Join(fx.Sysroot, "etc/apt/sources.list.d/"+n+".sources"))
+		assert.FileExists(t, filepath.Join(fx.Sysroot, "etc/apt/keyrings/"+n+".asc"))
+	}
+	assert.Equal(t, []string{"multiapt"}, fx.Runner.calls)
+}
+
+// 衝突要逐筆查：第二筆來源撞到舊 .list 時也要停下，而且第一筆也不能先寫。
+func TestInstallChecksEveryAptSourceForConflicts(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	dir := filepath.Join(fx.Sysroot, "etc/apt/sources.list.d")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	uri := strings.TrimSuffix(fx.Deps.GitHubBase, "/") + "/multi2"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "old-multi2.list"),
+		[]byte("deb [signed-by=/usr/share/keyrings/old.gpg] "+uri+" noble main\n"), 0o644))
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"multiapt"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"multiapt/apt-source-conflict"}, kinds(diffs))
+	assert.NoFileExists(t, filepath.Join(dir, "multi1.sources"))
+	assert.False(t, fx.requested("/multi1.gpg"))
 }

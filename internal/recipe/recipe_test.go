@@ -36,10 +36,54 @@ func TestValidateCollectsAllErrors(t *testing.T) {
 }
 
 func TestValidateLatestExactlyOne(t *testing.T) {
-	both := Catalog{"x": {Name: "x", Venue: "vm", Latest: &LatestSpec{GitHub: "a/b", URL: "u"}}}
-	assert.Len(t, Validate(both, platform.Defs{}), 1)
-	one := Catalog{"x": {Name: "x", Venue: "vm", Latest: &LatestSpec{GitHub: "a/b"}}}
-	assert.Empty(t, Validate(one, platform.Defs{}))
+	bad := []LatestSpec{
+		{GitHub: "a/b", URL: "u"},
+		{GitHub: "a/b", Provider: "godev"},
+		{URL: "u", Provider: "godev"},
+		{GitHub: "a/b", URL: "u", Provider: "godev"},
+	}
+	for _, l := range bad {
+		c := Catalog{"x": {Name: "x", Venue: "vm", Latest: &l}}
+		errs := Validate(c, platform.Defs{})
+		require.Len(t, errs, 1, "%+v", l)
+		assert.ErrorContains(t, errs[0], "擇一")
+	}
+	for _, l := range []LatestSpec{{GitHub: "a/b"}, {URL: "u"}, {Provider: "godev"}} {
+		c := Catalog{"x": {Name: "x", Venue: "vm", Latest: &l}}
+		assert.Empty(t, Validate(c, platform.Defs{}), "%+v", l)
+	}
+}
+
+func TestValidateUnknownProvider(t *testing.T) {
+	c := Catalog{"x": {Name: "x", Venue: "vm", Latest: &LatestSpec{Provider: "nope"},
+		Artifacts: []Artifact{{ID: "bin", URL: "https://e/x", Checksum: ChecksumSpec{Provider: "nope2"}}}}}
+	errs := Validate(c, platform.Defs{})
+	require.Len(t, errs, 2)
+	all := errs[0].Error() + "\n" + errs[1].Error()
+	assert.Contains(t, all, `latest.provider "nope"`)
+	assert.Contains(t, all, `checksum.provider "nope2"`)
+}
+
+func TestValidateProviderChecksumIsHashSource(t *testing.T) {
+	c := Catalog{"x": {Name: "x", Venue: "vm",
+		Artifacts: []Artifact{{ID: "bin", URL: "https://e/x", Checksum: ChecksumSpec{Provider: "godev"}}}}}
+	assert.Empty(t, Validate(c, platform.Defs{}))
+}
+
+func TestValidateDuplicateAptFile(t *testing.T) {
+	c := Catalog{"x": {Name: "x", Venue: "vm", AptSources: []AptSource{
+		{File: "x.sources", URIs: "https://a"},
+		{File: "x.sources", URIs: "https://b"},
+	}}}
+	errs := Validate(c, platform.Defs{})
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], "x.sources")
+}
+
+func TestLoadRejectsOldAptSourceKey(t *testing.T) {
+	_, err := Load(os.DirFS("testdata/oldaptkey"))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "apt_source")
 }
 
 func TestLoadStepsPerLayer(t *testing.T) {

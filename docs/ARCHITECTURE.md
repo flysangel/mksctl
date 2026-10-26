@@ -70,7 +70,7 @@ bash 執行 <名稱>_install、<名稱>_verify
 | 2 | 靜態檢查：缺平台檔、缺能力、參數名稱、`unverified` 未允許 | 否 |
 | 3 | 查最新版，下載並驗證到暫存目錄 | 否（暫存目錄結束時清掉） |
 | 4 | 偵測 apt 來源衝突 | 否 |
-| 5 | 寫套件來源（第三方 apt、alpine community 與 edge），更新套件索引。這次要跑的配方都沒有 `packages`、也沒有適用的 `apt_source` 時，整步略過 | 是，唯一例外 |
+| 5 | 寫套件來源（第三方 apt、alpine community 與 edge），更新套件索引。這次要跑的配方都沒有 `packages`、也沒有適用的 `apt_sources` 時，整步略過 | 是，唯一例外 |
 | 6 | 問套件索引，確認套件名稱存在 | 否 |
 | 7 | 依序執行配方，每成功一個就存狀態檔 | 是 |
 
@@ -98,10 +98,15 @@ bash 執行 <名稱>_install、<名稱>_verify
 ### 雜湊來源順序
 
 1. sigstore 簽章。有 `key` 時用金鑰驗證，沒有時用 keyless（比對 identity 與 issuer，並要求憑證帶 SCT）。
-2. 上游直連的 checksum 檔或官方 API。
-3. 自己驗證後的紀錄：`trust/hashes.yaml`。
-4. GitHub API 的 asset digest，只當備援。
-5. 套件庫簽章：apt、apk 與官方 apt 來源。
+2. 具名 provider 從上游官方 API 讀的雜湊（`checksum.provider`，例如 `godev`）。
+3. 上游直連的 checksum 檔（`checksum.file`）。
+4. 自己驗證後的紀錄：`trust/hashes.yaml`。
+5. GitHub API 的 asset digest，只當備援。
+6. 套件庫簽章：apt、apk 與官方 apt 來源。
+
+第一個有設定且適用的來源決定成敗，不往下試。provider 與 file 只要有設就適用；trust 要有該網址的紀錄、GitHub digest 要是 GitHub release 網址才適用。實作在 `internal/fetch` 的 `Get`。
+
+版本號的來源三選一：GitHub `releases/latest` 的轉址、回純文字版本號的網址，或具名 provider。provider 給版本號藏在 JSON 或目錄清單裡的上游，清單在 `internal/upstream/providers.go` 的 `Providers`。配方寫了不存在的 provider 名稱，載入時報錯。
 
 GitHub 上游優先直連：版本號讀 `releases/latest` 的轉址，雜湊直連下載。同一次執行裡，同一個 repo 不重複查。
 
@@ -125,8 +130,8 @@ GitHub 上游優先直連：版本號讀 `releases/latest` 的轉址，雜湊直
 | 指定版本只用 `--tag`，參數只用 `--set` | 環境變數經 `sudo` 會靜默消失 | 無程式擋 |
 | 沒有帶 `--allow-unverified` 不裝沒有雜湊來源的配方 | 完整性驗證不能被無聲繞過 | `internal/preflight` 的靜態檢查 |
 | 套件來源先寫、再查套件名稱 | 不先寫來源，就無法確認來源裡的套件查得到。代價是第 5 步會改機器 | `internal/install` 的測試 |
-| 第三方 apt 來源寫 deb822 `.sources`，欄位照抄官方文件 | 金鑰用 HTTPS 下載，不比對指紋。寫入前偵測同一 URI 的舊 `.list` 與金鑰衝突，有就停止 | `internal/aptsource` 的測試 |
-| `apt_source` 是否適用由平台能力決定 | 看有沒有 `apt` 能力，不看層名稱 | `internal/install` 的測試 |
+| 第三方 apt 來源寫 deb822 `.sources`，欄位照抄官方文件 | 金鑰用 HTTPS 下載，不比對指紋。寫入前偵測同一 URI 的舊 `.list` 與金鑰衝突，有就停止。一個配方可宣告多筆，同一配方內 `file` 不得重複 | `internal/aptsource` 的測試；重複由 `internal/recipe` 的 `Validate` 擋 |
+| `apt_sources` 是否適用由平台能力決定 | 看有沒有 `apt` 能力，不看層名稱 | `internal/install` 的測試 |
 | 簽章公鑰釘在 `trust/keys/` | 從上游抓公鑰，等於信任能換掉檔案的人。代價是上游換金鑰要手動更新 | 無程式擋 |
 | sigstore 同時支援金鑰與 keyless | kube-linter 用 cosign 金鑰簽章，沒有憑證可比對 identity。兩者並存或皆無，載入時報錯 | `internal/recipe` 的 `Validate` |
 | guest agent 只在 init 在跑時裝並啟用 | 容器 build 沒有 init，裝了只是變胖或失敗。agent 安裝失敗只警告 | base 配方的實測 |

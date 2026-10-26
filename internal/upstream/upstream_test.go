@@ -9,8 +9,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/flysangel/mksctl/internal/recipe"
 )
 
 // countingServer 記錄每個路徑被打了幾次，用來驗證 Latest 的快取。
@@ -54,10 +52,10 @@ func redirectServer(t *testing.T, from, to string) *countingServer {
 func TestLatestGitHubReadsRedirect(t *testing.T) {
 	srv := redirectServer(t, "/stackrox/kube-linter/releases/latest", "/stackrox/kube-linter/releases/tag/v0.8.3")
 	c := &Client{HTTP: srv.Client(), GitHubBase: srv.URL}
-	v, err := c.Latest(context.Background(), recipe.LatestSpec{GitHub: "stackrox/kube-linter"})
+	v, err := c.Latest(context.Background(), LatestSpec{GitHub: "stackrox/kube-linter"})
 	require.NoError(t, err)
 	assert.Equal(t, "v0.8.3", v)
-	v, err = c.Latest(context.Background(), recipe.LatestSpec{GitHub: "stackrox/kube-linter"})
+	v, err = c.Latest(context.Background(), LatestSpec{GitHub: "stackrox/kube-linter"})
 	require.NoError(t, err)
 	assert.Equal(t, "v0.8.3", v)
 	assert.Equal(t, 1, srv.hits("/stackrox/kube-linter/releases/latest"))
@@ -69,7 +67,7 @@ func TestLatestGitHubNoRedirectFails(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 	c := &Client{HTTP: srv.Client(), GitHubBase: srv.URL}
-	_, err := c.Latest(context.Background(), recipe.LatestSpec{GitHub: "a/b"})
+	_, err := c.Latest(context.Background(), LatestSpec{GitHub: "a/b"})
 	require.Error(t, err)
 }
 
@@ -79,7 +77,7 @@ func TestLatestURLTrimsBody(t *testing.T) {
 	})
 	c := &Client{HTTP: srv.Client()}
 	for range 2 {
-		v, err := c.Latest(context.Background(), recipe.LatestSpec{URL: srv.URL + "/stable.txt"})
+		v, err := c.Latest(context.Background(), LatestSpec{URL: srv.URL + "/stable.txt"})
 		require.NoError(t, err)
 		assert.Equal(t, "v3.19.0", v)
 	}
@@ -94,7 +92,7 @@ func TestLatestConcurrentQueriesOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
-			v, err := c.Latest(context.Background(), recipe.LatestSpec{URL: srv.URL + "/v"})
+			v, err := c.Latest(context.Background(), LatestSpec{URL: srv.URL + "/v"})
 			assert.NoError(t, err)
 			assert.Equal(t, "1.2.3", v)
 		})

@@ -371,3 +371,74 @@ func TestErrorsAreDistinct(t *testing.T) {
 	assert.False(t, errors.Is(ErrTrustMismatch, ErrChecksumMismatch))
 	assert.False(t, errors.Is(ErrUnverified, ErrChecksumMismatch))
 }
+
+// sumProvider 依 (版本, 檔名) 回固定雜湊，模擬 godev 這類在 API 裡公布雜湊的上游。
+type sumProvider struct {
+	sums map[string]string
+	got  []string
+}
+
+func (p *sumProvider) Latest(context.Context, *upstream.Client) (string, error) { return "v1", nil }
+
+func (p *sumProvider) Checksum(_ context.Context, _ *upstream.Client, version, filename string) (string, error) {
+	p.got = append(p.got, version+"/"+filename)
+	s, ok := p.sums[version+"/"+filename]
+	if !ok {
+		return "", fmt.Errorf("沒有 %s", filename)
+	}
+	return s, nil
+}
+
+func registerProvider(t *testing.T, name string, p upstream.Provider) {
+	t.Helper()
+	upstream.Providers[name] = p
+	t.Cleanup(func() { delete(upstream.Providers, name) })
+}
+
+func TestGetProviderChecksum(t *testing.T) {
+	srv := fileServer(t, map[string][]byte{"/v1/tool.tar.gz": payload}, nil)
+	p := &sumProvider{sums: map[string]string{"v1/tool.tar.gz": hexSum(payload)}}
+	registerProvider(t, "test-sum", p)
+	f := newFetcher(t, srv)
+	a := recipe.Artifact{ID: "tool", URL: srv.URL + "/{{.Version}}/tool.tar.gz",
+		Checksum: recipe.ChecksumSpec{Provider: "test-sum"}}
+	res, err := f.Get(context.Background(), a, "v1")
+	require.NoError(t, err)
+	assert.Equal(t, hexSum(payload), res.SHA256)
+	assert.Equal(t, []string{"v1/tool.tar.gz"}, p.got)
+
+	p.sums["v1/tool.tar.gz"] = hexSum(other)
+	f = newFetcher(t, srv)
+	_, err = f.Get(context.Background(), a, "v1")
+	require.ErrorIs(t, err, ErrChecksumMismatch)
+	dirEmpty(t, f.Dir)
+}
+
+// provider 查不到雜湊時不往下試 trust 或 GitHub digest：作者指定了來源，查不到就是有問題。
+func TestGetProviderMissingIsUnverified(t *testing.T) {
+	srv := fileServer(t, map[string][]byte{"/tool.tar.gz": payload}, nil)
+	registerProvider(t, "test-sum", &sumProvider{sums: map[string]string{}})
+	f := newFetcher(t, srv)
+	a := recipe.Artifact{ID: "tool", URL: srv.URL + "/tool.tar.gz",
+		Checksum: recipe.ChecksumSpec{Provider: "test-sum", Trust: true}}
+	_, err := f.Get(context.Background(), a, "v1")
+	require.ErrorIs(t, err, ErrUnverified)
+	dirEmpty(t, f.Dir)
+}
+
+// provider 排在 file 前面：兩者都設時由 provider 決定，file 不會被下載。
+func TestGetProviderBeforeFile(t *testing.T) {
+	var fileHit atomic.Bool
+	srv := fileServer(t, map[string][]byte{"/tool.tar.gz": payload}, func(r *http.Request) {
+		if r.URL.Path == "/tool.tar.gz.sha256" {
+			fileHit.Store(true)
+		}
+	})
+	registerProvider(t, "test-sum", &sumProvider{sums: map[string]string{"v1/tool.tar.gz": hexSum(payload)}})
+	f := newFetcher(t, srv)
+	a := recipe.Artifact{ID: "tool", URL: srv.URL + "/tool.tar.gz",
+		Checksum: recipe.ChecksumSpec{Provider: "test-sum", File: "{{.URL}}.sha256"}}
+	_, err := f.Get(context.Background(), a, "v1")
+	require.NoError(t, err)
+	assert.False(t, fileHit.Load())
+}

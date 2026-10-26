@@ -102,4 +102,4 @@ feature 分支上新增或改的 workflow，不能用 `workflow_dispatch` 手動
 | 為了讓實測變綠而改判準、刪測試或把 `[FAIL]` 改成 `[SKIP]` | `[FAIL]` 是唯一的訊號 |
 | 在髒工作樹跑 `task test:recipe` 後 commit `tests/verified.conf` | 紀錄對不上 commit，發版閘門會被假紀錄放行 |
 | 在配方裡釘上游版本號 | 設計是一律用最新版。壞版本寫進 `exclude` |
-| 加第三方 apt 來源時自訂 keyring 路徑 | 同一來源出現兩個不同的 `Signed-By`，apt 會拒讀全部來源清單。照官方 `.sources`，欄位寫進 `apt_source` |
+| 加第三方 apt 來源時自訂 keyring 路徑 | 同一來源出現兩個不同的 `Signed-By`，apt 會拒讀全部來源清單。照官方 `.sources`，欄位寫進 `apt_sources` |
