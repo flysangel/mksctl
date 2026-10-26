@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/flysangel/mksctl/internal/platform"
@@ -85,10 +84,9 @@ func (r *Runner) Run(ctx context.Context, p platform.Platform, rc recipe.Recipe,
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
 	cmd.Env = os.Environ()
-	// 配方會產生子行程（例如 sleep）；只殺 bash 的話，子行程握著輸出管線，
-	// Wait 會卡到它自己結束。所以自成一組行程，取消時整組一起殺。
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	// 行程組與取消時的殺法隨平台不同，細節與理由見 proc_unix.go。
+	configureProc(cmd)
+	cmd.Cancel = func() error { return killProc(cmd) }
 	cmd.WaitDelay = 2 * time.Second
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("配方 %s 執行失敗：%w", rc.Name, err)

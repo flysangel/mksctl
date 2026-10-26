@@ -384,14 +384,9 @@ func cmdList(e env, args []string, stdout io.Writer) error {
 			return err
 		}
 	} else {
-		b, err := os.ReadFile(filepath.Join(e.sysroot, "etc/os-release"))
-		if err != nil {
-			return fmt.Errorf("讀不到 os-release：%w", err)
-		}
-		if p, err = platform.Parse(b); err != nil {
+		if p, err = platform.Detect(e.sysroot); err != nil {
 			return err
 		}
-		p.InitRunning, p.InContainer = platform.DetectRuntime(e.sysroot)
 	}
 	defs, err := platform.LoadDefs(e.fsys)
 	if err != nil {

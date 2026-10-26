@@ -19,6 +19,7 @@ tasks:
       - python3 bin/check-docs.py
       - python3 bin/check-taskfile.py
       - go vet ./...
+      - GOOS=windows go build ./...
       - |
         # 目錄可能還沒建，只掃存在的
         dirs=()

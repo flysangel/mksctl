@@ -244,19 +244,20 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 }
 
 func loadPlatform(deps Deps, sysroot string) (platform.Platform, recipe.Catalog, platform.Defs, error) {
-	osr := deps.OSRelease
-	if osr == nil {
-		b, err := os.ReadFile(filepath.Join(sysroot, "etc/os-release"))
-		if err != nil {
-			return platform.Platform{}, nil, nil, fmt.Errorf("讀不到 os-release：%w", err)
+	var p platform.Platform
+	var err error
+	if deps.OSRelease != nil {
+		// 測試注入內容時走 Parse；正式執行走 Detect，平台判斷才有單一接縫。
+		p, err = platform.Parse(deps.OSRelease)
+		if err == nil {
+			p.InitRunning, p.InContainer = platform.DetectRuntime(sysroot)
 		}
-		osr = b
+	} else {
+		p, err = platform.Detect(sysroot)
 	}
-	p, err := platform.Parse(osr)
 	if err != nil {
 		return platform.Platform{}, nil, nil, err
 	}
-	p.InitRunning, p.InContainer = platform.DetectRuntime(sysroot)
 	defs, err := platform.LoadDefs(deps.FS)
 	if err != nil {
 		return platform.Platform{}, nil, nil, err
