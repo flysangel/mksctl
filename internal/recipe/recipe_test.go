@@ -132,3 +132,110 @@ func TestValidateSigstoreKeyOrIdentity(t *testing.T) {
 	require.Len(t, errs, 1)
 	assert.ErrorContains(t, errs[0], "issuer")
 }
+
+func dw(key, name string, v int) RegValue {
+	return RegValue{Key: key, Name: name, Type: "dword", Value: v, Restore: RegRestore{Mode: "delete"}}
+}
+
+func winDefs() platform.Defs {
+	return platform.Defs{"windows": {Provides: []string{"windows", "registry", "powershell"}}}
+}
+
+func winRecipe(venue, scope string, regs ...RegValue) Catalog {
+	return Catalog{"x": {Name: "x", Requires: []string{"windows"}, Venue: venue, Scope: scope, Registry: regs}}
+}
+
+func TestValidateWindowsVenue(t *testing.T) {
+	errs := Validate(winRecipe("podman", "", dw(`HKLM\SOFTWARE\X`, "A", 1)), winDefs())
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], "actions、vm")
+	assert.Empty(t, Validate(winRecipe("actions", "", dw(`HKLM\SOFTWARE\X`, "A", 1)), winDefs()))
+	assert.Empty(t, Validate(winRecipe("vm", "", dw(`HKLM\SOFTWARE\X`, "A", 1)), winDefs()))
+}
+
+func TestValidateLinuxVenueRejectsActions(t *testing.T) {
+	c := Catalog{"x": {Name: "x", Venue: "actions"}}
+	errs := Validate(c, platform.Defs{})
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], "podman、lxc、vm")
+}
+
+func TestValidateScopeAndRegistryOnlyForWindows(t *testing.T) {
+	c := Catalog{"x": {Name: "x", Venue: "vm", Scope: "user"}, "y": {Name: "y", Venue: "vm", Registry: []RegValue{dw(`HKLM\X`, "A", 1)}}}
+	assert.Len(t, Validate(c, platform.Defs{}), 2)
+}
+
+func TestValidateBadScope(t *testing.T) {
+	errs := Validate(winRecipe("vm", "root", dw(`HKLM\X`, "A", 1)), winDefs())
+	require.NotEmpty(t, errs)
+	assert.ErrorContains(t, errs[0], "scope")
+}
+
+func TestValidateRegistryType(t *testing.T) {
+	bad := dw(`HKLM\X`, "A", 1)
+	bad.Type = "bool"
+	errs := Validate(winRecipe("vm", "", bad), winDefs())
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], "type")
+}
+
+func TestValidateAbsentRules(t *testing.T) {
+	ok := RegValue{Key: `HKLM\X`, Name: "A", Ensure: "absent", Restore: RegRestore{Mode: "keep"}, Reason: "不還原"}
+	assert.Empty(t, Validate(winRecipe("vm", "", ok), winDefs()))
+	bad := ok
+	bad.Type, bad.Value, bad.Restore = "dword", 1, RegRestore{Mode: "delete"}
+	errs := Validate(winRecipe("vm", "", bad), winDefs())
+	require.Len(t, errs, 2)
+	assert.ErrorContains(t, errs[0], "type 或 value")
+	assert.ErrorContains(t, errs[1], "keep")
+}
+
+func TestValidateKeepNeedsReason(t *testing.T) {
+	v := dw(`HKLM\X`, "A", 1)
+	v.Restore = RegRestore{Mode: "keep"}
+	errs := Validate(winRecipe("vm", "", v), winDefs())
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], "reason")
+	v.Reason = "原因"
+	assert.Empty(t, Validate(winRecipe("vm", "", v), winDefs()))
+}
+
+func TestValidateHKCUNeedsUserScope(t *testing.T) {
+	errs := Validate(winRecipe("vm", "machine", dw(`HKCU\X`, "A", 1)), winDefs())
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], "scope 必須是 user")
+	errs = Validate(winRecipe("vm", "user", dw(`HKLM\X`, "A", 1)), winDefs())
+	require.Len(t, errs, 1)
+	assert.Empty(t, Validate(winRecipe("vm", "user", dw(`HKCU\X`, "A", 1)), winDefs()))
+	assert.Empty(t, Validate(winRecipe("vm", "", dw(`HKCR\X`, "A", 1)), winDefs()))
+	errs = Validate(winRecipe("vm", "", dw(`HKU\X`, "A", 1)), winDefs())
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], "根")
+}
+
+func TestValidateWindowsNeedsRegistryWithoutPs1(t *testing.T) {
+	errs := Validate(winRecipe("vm", ""), winDefs())
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], "registry")
+}
+
+func TestValidatePs1NeedsRestore(t *testing.T) {
+	c, err := Load(os.DirFS("testdata/win"))
+	require.NoError(t, err)
+	assert.True(t, c["x"].HasPs1)
+	assert.False(t, c["x"].HasSh)
+	errs := Validate(c, winDefs())
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], "x_restore")
+}
+
+func TestLoadRegRestoreForms(t *testing.T) {
+	c, err := Load(os.DirFS("testdata/win"))
+	require.NoError(t, err)
+	regs := c["x"].Registry
+	require.Len(t, regs, 3)
+	assert.Equal(t, RegRestore{Mode: "delete"}, regs[0].Restore)
+	assert.Equal(t, RegRestore{Mode: "value", Value: 1}, regs[1].Restore)
+	assert.Equal(t, "keep", regs[2].Restore.Mode)
+	assert.True(t, c["x"].Windows())
+}

@@ -1,0 +1,1 @@
+provides: [windows, registry, powershell]

@@ -1,5 +1,5 @@
 #!/bin/bash
-# smoke-venue.sh — 對 mksctl list --all 中某個場地的每個配方跑 task test:recipe，印失敗清單
+# smoke-venue.sh — 對 mksctl list --all 中某個場地的每個 Linux 配方跑 task test:recipe，印失敗清單
 # 驅動：.github/workflows/release.yml 的 smoke job、.github/workflows/weekly.yml
 # 註記：逐項容錯，捨棄 -e；單一配方失敗由 failed 累積，最後一起回報
 set -uo pipefail
@@ -24,13 +24,13 @@ listing="$(./dist/mksctl list --all)" || {
 }
 
 # 場地的預期配方數：跑完拿來和實際跑過的數量比對
-expected="$(awk -v v="${venue}" '$2 == v' <<<"${listing}" | wc -l)"
+expected="$(awk -v v="${venue}" '$2 == v && $3 == "linux"' <<<"${listing}" | wc -l)"
 
 ran=0
 failed=()
 # 用 fd 3 讀清單：task test:recipe 會繼承 stdin，吃掉後面的配方行會讓配方少跑卻仍通過
-while read -r -u 3 name v _; do
-  if [[ "${v}" != "${venue}" ]]; then
+while read -r -u 3 name v family _; do
+  if [[ "${v}" != "${venue}" || "${family}" != "linux" ]]; then
     continue
   fi
   ran=$((ran + 1))

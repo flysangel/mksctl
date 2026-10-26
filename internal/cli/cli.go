@@ -382,7 +382,11 @@ func cmdList(e env, args []string, stdout io.Writer) error {
 	sort.Strings(names)
 	if *all {
 		for _, n := range names {
-			fmt.Fprintf(stdout, "%s %s\n", n, cat[n].Venue)
+			family := "linux"
+			if cat[n].Windows() {
+				family = "windows"
+			}
+			fmt.Fprintf(stdout, "%s %s %s\n", n, cat[n].Venue, family)
 		}
 		return nil
 	}

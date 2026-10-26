@@ -48,7 +48,8 @@ now="$(date -u +%s)"
 missing=()
 checked=0
 
-while read -r name venue _; do
+while read -r name venue family _; do
+  [[ "${family}" == "linux" ]] || continue # Windows 配方的紀錄走別的平台表
   case "${venue}" in
   lxc | vm) ;;
   *) continue ;;

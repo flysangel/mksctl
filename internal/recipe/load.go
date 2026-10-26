@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"regexp"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/flysangel/mksctl/internal/platform"
 	"github.com/flysangel/mksctl/internal/upstream"
@@ -35,9 +37,32 @@ func Load(fsys fs.FS) (Catalog, error) {
 		}
 		r.Name = name
 		r.Versioned = r.Latest != nil
+		dir := path.Dir(f)
+		_, err = fs.Stat(fsys, dir+"/recipe.sh")
+		r.HasSh = err == nil
+		if ps1, err := fs.ReadFile(fsys, dir+"/recipe.ps1"); err == nil {
+			r.HasPs1 = true
+			r.Ps1Missing = missingPs1Funcs(name, string(ps1))
+		}
 		c[name] = r
 	}
 	return c, nil
+}
+
+// missingPs1Funcs 回傳 recipe.ps1 沒定義的函式後綴（install、verify、restore）。
+func missingPs1Funcs(name, src string) []string {
+	re := regexp.MustCompile(`(?im)^\s*function\s+` + regexp.QuoteMeta(name) + `_(install|verify|restore)\b`)
+	found := map[string]bool{}
+	for _, m := range re.FindAllStringSubmatch(src, -1) {
+		found[strings.ToLower(m[1])] = true
+	}
+	var missing []string
+	for _, f := range []string{"install", "verify", "restore"} {
+		if !found[f] {
+			missing = append(missing, f)
+		}
+	}
+	return missing
 }
 
 // Validate 回傳全部錯誤，不在第一個就停，讓作者一次看完。
@@ -88,8 +113,18 @@ func Validate(c Catalog, defs platform.Defs) []error {
 				add("配方 %s：requires 的能力 %q 沒有任何平台層提供", n, req)
 			}
 		}
-		if !slices.Contains([]string{"podman", "lxc", "vm"}, r.Venue) {
-			add("配方 %s：venue %q 不是 podman、lxc、vm 之一", n, r.Venue)
+		if r.Windows() {
+			if !slices.Contains([]string{"actions", "vm"}, r.Venue) {
+				add("配方 %s：Windows 配方的 venue %q 不是 actions、vm 之一", n, r.Venue)
+			}
+			validateWindows(n, r, add)
+		} else {
+			if !slices.Contains([]string{"podman", "lxc", "vm"}, r.Venue) {
+				add("配方 %s：venue %q 不是 podman、lxc、vm 之一", n, r.Venue)
+			}
+			if r.Scope != "" || len(r.Registry) > 0 {
+				add("配方 %s：只有 Windows 配方（requires windows）能有 scope 或 registry", n)
+			}
 		}
 		if !r.Unverified {
 			for _, a := range r.Artifacts {
@@ -146,5 +181,51 @@ func validateSigstore(recipe, id string, s SigstoreSpec, add func(string, ...any
 		add("配方 %s：artifact %q 的 sigstore 要有 key，或有 identity 與 issuer", recipe, id)
 	case s.Key == "" && (s.Identity == "" || s.Issuer == ""):
 		add("配方 %s：artifact %q 的 sigstore keyless 要同時有 identity 與 issuer", recipe, id)
+	}
+}
+
+// validateWindows 檢查 Windows 配方的 scope、registry 與 recipe.ps1。
+func validateWindows(n string, r Recipe, add func(string, ...any)) {
+	if !slices.Contains([]string{"", "machine", "user"}, r.Scope) {
+		add("配方 %s：scope %q 不是 machine、user 之一", n, r.Scope)
+	}
+	if !r.HasPs1 && len(r.Registry) == 0 {
+		add("配方 %s：Windows 配方沒有 recipe.ps1 時，registry 不能是空的", n)
+	}
+	for _, f := range r.Ps1Missing {
+		add("配方 %s：recipe.ps1 沒定義 %s_%s", n, n, f)
+	}
+	for _, v := range r.Registry {
+		id := v.Key + `\` + v.Name
+		switch {
+		case strings.HasPrefix(v.Key, `HKCU\`):
+			if r.Scope != "user" {
+				add("配方 %s：登錄值 %s 在 HKCU，配方 scope 必須是 user", n, id)
+			}
+		case strings.HasPrefix(v.Key, `HKLM\`), strings.HasPrefix(v.Key, `HKCR\`):
+			if r.Scope == "user" {
+				add("配方 %s：登錄值 %s 不在 HKCU，scope: user 的配方不能寫", n, id)
+			}
+		default:
+			add("配方 %s：登錄值 %s 的根只接受 HKCU、HKLM、HKCR", n, id)
+		}
+		switch v.Ensure {
+		case "", "present":
+			if !slices.Contains([]string{"dword", "qword", "string", "expand_string", "multi_string"}, v.Type) {
+				add("配方 %s：登錄值 %s 的 type %q 不合法", n, id, v.Type)
+			}
+		case "absent":
+			if v.Type != "" || v.Value != nil {
+				add("配方 %s：登錄值 %s 是 ensure: absent，不能有 type 或 value", n, id)
+			}
+			if v.Restore.Mode != "keep" {
+				add("配方 %s：登錄值 %s 是 ensure: absent，restore 必須是 keep", n, id)
+			}
+		default:
+			add("配方 %s：登錄值 %s 的 ensure %q 不是 present、absent 之一", n, id, v.Ensure)
+		}
+		if v.Restore.Mode == "keep" && v.Reason == "" {
+			add("配方 %s：登錄值 %s 是 restore: keep，reason 不能是空的", n, id)
+		}
 	}
 }

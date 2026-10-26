@@ -1,7 +1,12 @@
 // Package recipe 載入並驗證 recipes/<名稱>/recipe.yaml 組成的配方目錄。
 package recipe
 
-import "github.com/flysangel/mksctl/internal/upstream"
+import (
+	"slices"
+
+	"github.com/flysangel/mksctl/internal/upstream"
+	"github.com/flysangel/mksctl/internal/winreg"
+)
 
 // Recipe 是一份配方。Name 取自目錄名，不是 YAML 欄位，避免兩處不一致。
 type Recipe struct {
@@ -23,9 +28,27 @@ type Recipe struct {
 	// AptSources 是要加的第三方 apt 來源。用清單是因為有的配方要兩個來源（例如套件與它的相依）。
 	// 舊的單筆欄位 apt_source 不再接受：KnownFields 會報錯，不會被靜默忽略。
 	AptSources []AptSource `yaml:"apt_sources"`
+	// Scope 是 Windows 配方的套用範圍：空字串視為 machine，user 寫使用者 hive。非 Windows 配方不能有。
+	Scope string `yaml:"scope"`
+	// Registry 是 Windows 配方宣告的登錄值，由 winreg 套用、回讀與還原。
+	Registry []RegValue `yaml:"registry"`
+	// HasSh、HasPs1 由 Load 看 recipes/<名稱>/recipe.sh、recipe.ps1 在不在而填。
+	HasSh  bool `yaml:"-"`
+	HasPs1 bool `yaml:"-"`
+	// Ps1Missing 由 Load 填：recipe.ps1 缺少的 <名稱>_install、_verify、_restore 函式後綴。
+	Ps1Missing []string `yaml:"-"`
 	// Versioned 由 Latest 推得（不是 YAML 欄位）：沒有 latest 的配方每次都執行。
 	Versioned bool `yaml:"-"`
 }
+
+// Windows 回報配方是否屬於 Windows 家族。
+func (r Recipe) Windows() bool { return slices.Contains(r.Requires, "windows") }
+
+// RegValue 與 RegRestore 的定義在 winreg，配方載入與引擎共用同一份。
+type (
+	RegValue   = winreg.Value
+	RegRestore = winreg.RestoreSpec
+)
 
 // LatestSpec 的 GitHub、URL、Provider 三選一。型別定義在 upstream，理由見該處註解。
 type LatestSpec = upstream.LatestSpec

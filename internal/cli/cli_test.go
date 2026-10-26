@@ -336,7 +336,17 @@ func TestListPlatformBad(t *testing.T) {
 func TestListAll(t *testing.T) {
 	code, out, _ := runCLI(t, "list", "--all")
 	assert.Equal(t, 0, code)
-	assert.Equal(t, "gpu vm\nhelm podman\nsd lxc\nwithlatest podman\nxfce vm\n", out)
+	assert.Equal(t, "gpu vm linux\nhelm podman linux\nsd lxc linux\nwithlatest podman linux\nxfce vm linux\n", out)
+}
+
+func TestListAllPrintsFamily(t *testing.T) {
+	files := map[string]string{
+		"recipes/helm/recipe.yaml": "venue: podman\n",
+		"recipes/winx/recipe.yaml": "venue: actions\nrequires: [windows]\n",
+	}
+	code, out, errOut := runCLI(t, withFS(files), "list", "--all")
+	require.Equal(t, 0, code, errOut)
+	assert.Equal(t, "helm podman linux\nwinx actions windows\n", out)
 }
 
 func TestListAllEmptyCatalog(t *testing.T) {

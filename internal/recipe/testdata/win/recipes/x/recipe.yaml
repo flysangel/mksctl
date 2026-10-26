@@ -1,0 +1,19 @@
+venue: vm
+requires: [windows]
+registry:
+  - key: HKLM\SOFTWARE\X
+    name: A
+    type: dword
+    value: 1
+    restore: delete
+  - key: HKLM\SOFTWARE\X
+    name: B
+    type: dword
+    value: 2
+    restore: {value: 1}
+  - key: HKLM\SOFTWARE\X
+    name: C
+    type: dword
+    value: 3
+    restore: keep
+    reason: 不可還原

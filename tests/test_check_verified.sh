@@ -16,12 +16,12 @@ trap 'rm -rf "${W}"' EXIT
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
-# 假的 mksctl：兩個配方，r1 是 lxc、r2 是 podman；兩個平台都支援兩者
+# 假的 mksctl：r1 是 lxc、r2 是 podman、w1 是 Windows 家族的 vm；兩個平台都支援三者
 cat >"${W}/mksctl" <<'FAKE'
 #!/bin/bash
 case "$*" in
-"list --all") printf 'r1 lxc\nr2 podman\n' ;;
-"list --platform "*) printf 'r1\nr2\n' ;;
+"list --all") printf 'r1 lxc linux\nr2 podman linux\nw1 vm windows\n' ;;
+"list --platform "*) printf 'r1\nr2\nw1\n' ;;
 *) exit 1 ;;
 esac
 FAKE
@@ -81,6 +81,16 @@ if ((rc == 1)) && grep -q 'r1 pb' "${W}/out"; then
   ok "缺紀錄時列出並 exit 1"
 else
   bad "缺紀錄時列出並 exit 1（rc=${rc}）"
+  cat "${W}/out" >&2
+fi
+
+# w1 是 windows 家族的 vm 配方，conf 沒有它的紀錄，仍應通過
+run_check "r1 pa lxc H-r1 ${today}
+r1 pb lxc H-r1 ${today}"
+if ((rc == 0)) && ! grep -q 'w1' "${W}/out"; then
+  ok "windows 家族的 vm 配方不要求 Linux 平台的紀錄"
+else
+  bad "windows 家族的 vm 配方不要求 Linux 平台的紀錄（rc=${rc}）"
   cat "${W}/out" >&2
 fi
 
