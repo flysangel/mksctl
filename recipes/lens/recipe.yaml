@@ -1,0 +1,16 @@
+venue: podman
+requires:
+  - apt
+  - desktop
+packages:
+  - lens
+# Lens 套件不會自己寫來源檔，所以路徑沒有被套件改寫的問題。
+# 金鑰是 ASCII-armored，放 .asc（apt 不認 .gpg 副檔名裡的 armored 內容）。
+# 舊 provision 留下的 lens.list（keyring 在 /etc/apt/keyrings/lens-archive-keyring.gpg）會被安裝前檢查列為衝突。
+apt_sources:
+  - file: lens.sources
+    uris: https://downloads.k8slens.dev/apt/debian
+    suites: stable
+    components: main
+    signed_by: /etc/apt/keyrings/lens.asc
+    key_url: https://downloads.k8slens.dev/keys/gpg

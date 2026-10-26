@@ -1,0 +1,15 @@
+{
+    "DefaultBrowserSettingEnabled": true,
+    "MetricsReportingEnabled": false,
+    "PromotionsEnabled": false,
+    "HideWebStoreIcon": true,
+    "CommandLineFlagSecurityWarningsEnabled": false,
+    "PrivacySandboxAdMeasurementEnabled": false,
+    "PrivacySandboxAdTopicsEnabled": false,
+    "PrivacySandboxPromptEnabled": false,
+    "PrivacySandboxSiteEnabledAdsEnabled": false,
+    "ExtensionInstallForcelist": [
+        "bgnkhhnnamicmpeenaelnjfhikgbkllg",
+        "lcghoajegeldpfkfaejegfobkapnemjl"
+    ]
+}

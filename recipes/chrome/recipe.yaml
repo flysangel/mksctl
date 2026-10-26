@@ -1,0 +1,20 @@
+venue: podman
+requires:
+  - apt
+  - desktop
+packages:
+  - google-chrome-stable
+  - jq
+# 為什麼用舊的 URIs（chrome/deb）而不是套件自己寫的 chrome-stable/deb：
+# google-chrome-stable 的 postinst 會把 google-chrome.sources 改寫成 chrome-stable/deb，
+# 並用二進位金鑰 /usr/share/keyrings/google-chrome.gpg。mksctl 只能原樣存放 Google 公布的 ASCII-armored 金鑰，
+# apt 不認 .gpg 副檔名裡的 armored 內容，所以金鑰只能放 .asc。
+# 檔名與套件相同（google-chrome.sources），套件改寫時是整檔取代，不會同時留下兩個 Signed-By；
+# URIs 刻意不同，重跑時安裝前檢查才不會把「套件改寫的檔」當成衝突。
+apt_sources:
+  - file: google-chrome.sources
+    uris: https://dl.google.com/linux/chrome/deb/
+    suites: stable
+    components: main
+    signed_by: /etc/apt/keyrings/google-chrome.asc
+    key_url: https://dl.google.com/linux/linux_signing_key.pub

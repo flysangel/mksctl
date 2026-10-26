@@ -1,0 +1,7 @@
+MS-CEINTL.vscode-language-pack-zh-hant
+foxundermoon.shell-format@7.2.5
+DavidAnson.vscode-markdownlint
+shd101wyy.markdown-preview-enhanced
+redhat.vscode-yaml
+task.vscode-task
+exiasr.hadolint
