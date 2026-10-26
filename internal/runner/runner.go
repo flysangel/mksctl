@@ -127,9 +127,17 @@ func (r *Runner) compose(p platform.Platform, name string, vars map[string]strin
 	if err != nil {
 		return "", fmt.Errorf("讀不到配方 %s：%w", name, err)
 	}
+	// 在 Go 端先檢查函式定義，確保缺函式時配方的頂層碼完全不會執行。
+	for _, fn := range []string{name + "_install", name + "_verify"} {
+		re := regexp.MustCompile(`(?m)^\s*(function\s+)?` + regexp.QuoteMeta(fn) + `\s*(\(\s*\))?\s*\{`)
+		if !re.Match(data) {
+			return "", fmt.Errorf("Error: 配方缺少函式 %s", fn)
+		}
+	}
 	fmt.Fprintf(&b, "\n# --- recipes/%s/recipe.sh ---\n%s\n", name, data)
 
-	// 先確認兩個函式都在，才開始動系統；缺一個就不該裝一半。
+	// 第二道保險：頂層碼已跑過，只能擋住後面的呼叫。主要檢查在上面 Go 端，
+	// 在執行任何配方碼之前做。
 	for _, fn := range []string{name + "_install", name + "_verify"} {
 		fmt.Fprintf(&b, "declare -F %[1]s >/dev/null || { echo %[2]s >&2; exit 1; }\n",
 			quote(fn), quote("Error: 配方缺少函式 "+fn))

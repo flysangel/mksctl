@@ -72,7 +72,13 @@ func (f File) Save(path string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(f, "", "  ")
+	// 統一存 UTC，不同時區的機器寫出的檔才一致。
+	rs := make(map[string]Entry, len(f.Recipes))
+	for k, e := range f.Recipes {
+		e.InstalledAt = e.InstalledAt.UTC()
+		rs[k] = e
+	}
+	b, err := json.MarshalIndent(File{Recipes: rs}, "", "  ")
 	if err != nil {
 		return err
 	}

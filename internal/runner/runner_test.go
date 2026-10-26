@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/flysangel/mksctl/internal/platform"
 	"github.com/flysangel/mksctl/internal/recipe"
@@ -52,11 +53,14 @@ func TestRunVerifyFailureIsError(t *testing.T) {
 }
 
 func TestRunMissingFunctionIsErrorBeforeExec(t *testing.T) {
-	fsys := demoFS(t, "echo SIDE_EFFECT\ndemo_install() { echo i; }\n")
+	fsys := demoFS(t, "echo TOPLEVEL_MARK\ndemo_install() { echo INSTALL_MARK; }\n")
 	out, errs, err := run(t, fsys, []string{"common"}, "demo", nil)
 	require.Error(t, err)
-	assert.NotContains(t, out, "i\n")
-	assert.Contains(t, errs, "demo_verify")
+	assert.NotContains(t, out, "TOPLEVEL_MARK")
+	assert.NotContains(t, out, "INSTALL_MARK")
+	assert.Contains(t, err.Error(), "Error:")
+	assert.Contains(t, err.Error(), "demo_verify")
+	_ = errs
 }
 
 func TestRunEnvExportedAndQuoted(t *testing.T) {
@@ -97,12 +101,21 @@ func TestRunRecipeDirExistsWhenNoFiles(t *testing.T) {
 }
 
 func TestRunContextCancelKills(t *testing.T) {
-	fsys := demoFS(t, "demo_install() { sleep 30; }\ndemo_verify() { :; }\n")
+	fsys := demoFS(t, "demo_install() { sleep 30 & wait; }\ndemo_verify() { :; }\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 300_000_000)
 	defer cancel()
 	r := &Runner{FS: fsys, Bin: "/bin/false", Stdout: io.Discard, Stderr: io.Discard}
+	start := time.Now()
 	err := r.Run(ctx, platform.Platform{Layers: []string{"common"}}, recipe.Recipe{Name: "demo"}, nil)
 	require.Error(t, err)
+	assert.Less(t, time.Since(start), 5*time.Second, "沒有殺整組行程時會卡到 sleep 結束")
+}
+
+func TestRunSetEAppliesToRecipe(t *testing.T) {
+	fsys := demoFS(t, "demo_install() { false; echo NOT_REACHED; }\ndemo_verify() { :; }\n")
+	out, _, err := run(t, fsys, []string{"common"}, "demo", nil)
+	require.Error(t, err)
+	assert.NotContains(t, out, "NOT_REACHED")
 }
 
 func TestCommonSvcEnable(t *testing.T) {

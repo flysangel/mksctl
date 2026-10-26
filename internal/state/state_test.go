@@ -53,3 +53,12 @@ func TestSaveIsAtomic(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"installed_at": "2026-10-26T01:02:03Z"`)
 }
+
+func TestSaveWritesUTC(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+	at := time.Date(2026, 10, 26, 9, 2, 3, 0, time.FixedZone("x", 8*3600))
+	require.NoError(t, File{Recipes: map[string]Entry{"a": {Version: "v", InstalledAt: at}}}.Save(p))
+	raw, err := os.ReadFile(p)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"installed_at": "2026-10-26T01:02:03Z"`)
+}

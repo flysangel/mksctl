@@ -1,6 +1,6 @@
 #!/bin/bash
 # common.sh — 所有平台共用的 helper 函式庫
-# 驅動：mksctl 的 runner 在 source 各層時，最先載入本檔
+# 驅動：mksctl 的 runner 把各層內嵌進組合腳本時，最先載入本檔
 # 註記：函式庫不設 set 旗標，set -e 會污染呼叫端的 shell；失敗由各函式 return 1
 #       _svc_enable 與 _svc_start 由 apk.sh、apt.sh 定義，本檔只負責呼叫
 
