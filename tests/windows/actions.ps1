@@ -32,6 +32,21 @@ function Write-Step {
     }
 }
 
+# Invoke-NativeQuiet 執行原生命令、丟掉輸出，回傳離開碼。
+# PS 5.1 在 EAP=Stop 下會把合流的 stderr 每行升成終止錯誤，所以呼叫期間暫時改 Continue，成敗只看離開碼。
+function Invoke-NativeQuiet {
+    param([string]$Exe, [string[]]$NativeArgs)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Exe @NativeArgs 2>&1 | Out-Null
+        return $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
 function Show-Log {
     param([string]$Path)
     if (Test-Path -LiteralPath $Path) {
@@ -111,7 +126,7 @@ if (-not (Test-Path -LiteralPath $exe)) {
 }
 $pubExe = Join-Path $pub 'mksctl.exe'
 Copy-Item -LiteralPath $exe -Destination $pubExe -Force
-icacls $pub /grant 'Everyone:(OI)(CI)M' | Out-Null
+$null = Invoke-NativeQuiet 'icacls.exe' @($pub, '/grant', 'Everyone:(OI)(CI)M')
 
 $list = Invoke-Mks @('list', '--all')
 if ($list.Code -ne 0) {
@@ -157,9 +172,9 @@ function Test-UserRecipe {
     Start-Service seclogon
     Get-LocalUser -Name $user -ErrorAction SilentlyContinue | Remove-LocalUser
     New-LocalUser -Name $user -Password $pw | Out-Null
-    Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $user
     $hive = 'HKU\mksctl-hive'
     try {
+        Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $user
         $uout = Join-Path $pub 'user-out.txt'
         $uerr = Join-Path $pub 'user-err.txt'
         foreach ($step in @('install', 'install', 'restore', 'restore')) {
@@ -176,8 +191,7 @@ function Test-UserRecipe {
                 # 行程結束後 hive 非同步卸載，剛結束就掛可能「檔案使用中」，重試最多 10 次
                 $loaded = $false
                 for ($i = 0; $i -lt 10 -and -not $loaded; $i++) {
-                    & reg.exe load $hive $dat 2>&1 | Out-Null
-                    $loaded = ($LASTEXITCODE -eq 0)
+                    $loaded = ((Invoke-NativeQuiet 'reg.exe' @('load', $hive, $dat)) -eq 0)
                     if (-not $loaded) { Start-Sleep -Seconds 1 }
                 }
                 Write-Step $loaded "$Name：reg load 掛上 $user 的 NTUSER.DAT"
@@ -187,14 +201,14 @@ function Test-UserRecipe {
                         Write-Step ($declared.Count -gt 0) "$Name：recipe.yaml 讀得到宣告的登錄值（$($declared.Count) 筆）"
                         foreach ($kv in $declared) {
                             $k = $kv[0] -replace '^HKCU', $hive
-                            & reg.exe query $k /v $kv[1] | Out-Null
-                            Write-Step ($LASTEXITCODE -eq 0) "$Name：使用者 hive 讀得到 $($kv[0])\$($kv[1])"
+                            $qc = Invoke-NativeQuiet 'reg.exe' @('query', $k, '/v', $kv[1])
+                            Write-Step ($qc -eq 0) "$Name：使用者 hive 讀得到 $($kv[0])\$($kv[1])"
                         }
                     }
                     finally {
                         [gc]::Collect(); [gc]::WaitForPendingFinalizers()
-                        & reg.exe unload $hive 2>&1 | Out-Null
-                        Write-Step ($LASTEXITCODE -eq 0) "$Name：reg unload $hive"
+                        $uc = Invoke-NativeQuiet 'reg.exe' @('unload', $hive)
+                        Write-Step ($uc -eq 0) "$Name：reg unload $hive"
                     }
                 }
             }
