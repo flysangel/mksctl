@@ -12,7 +12,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -188,7 +190,13 @@ func FindConflicts(sysroot string, s recipe.AptSource, p platform.Platform) ([]C
 	if err != nil {
 		return nil, err
 	}
-	var cs []Conflict
+	type parsed struct {
+		name     string
+		isList   bool
+		isTarget bool
+		entries  []entry
+	}
+	var files []parsed
 	for _, de := range ents {
 		name := de.Name()
 		isList := strings.HasSuffix(name, ".list")
@@ -199,40 +207,110 @@ func FindConflicts(sysroot string, s recipe.AptSource, p platform.Platform) ([]C
 		if err != nil {
 			return nil, err
 		}
-		var es []entry
+		pf := parsed{name: name, isList: isList, isTarget: name == s.File}
 		if isList {
-			es = parseList(string(data))
+			pf.entries = parseList(string(data))
 		} else {
-			es = parseSources(string(data))
+			pf.entries = parseSources(string(data))
 		}
-		isTarget := name == s.File
-		abs := "/" + sourcesDir + "/" + name
-	scan:
-		for _, e := range es {
+		files = append(files, pf)
+	}
+
+	// 第一輪：找出每個檔的衝突 URI 與其他（不衝突的）URI。
+	type hit struct {
+		pf        parsed
+		conflict  []string
+		others    []string
+		keyrings  []string // 衝突行的 signed-by，已去重
+		abs       string
+		isRemoved bool
+	}
+	var hits []*hit
+	removed := map[string]bool{}
+	for _, pf := range files {
+		h := &hit{pf: pf, abs: "/" + sourcesDir + "/" + pf.name}
+		seenKR := map[string]bool{}
+		for _, e := range pf.entries {
+			isConf := false
 			for _, u := range e.uris {
-				if !ours[normURI(u)] {
-					continue
+				if ours[normURI(u)] && !(pf.isTarget && e.signedBy == r.signedBy) {
+					isConf = true
+					h.conflict = append(h.conflict, u)
 				}
-				if isTarget && e.signedBy == r.signedBy {
-					continue
-				}
-				c := Conflict{File: abs, URI: u}
-				fix := "rm " + abs
-				if isTarget {
-					c.Reason = fmt.Sprintf("同一個來源檔的 Signed-By 是 %q，與要寫的 %q 不同", e.signedBy, r.signedBy)
-				} else {
-					c.Reason = "同一個 URI 已出現在其他來源檔，apt 會因 Signed-By 不一致而拒讀全部來源"
-					if isList && e.signedBy != "" && e.signedBy != r.signedBy {
-						fix += " && rm " + e.signedBy
-					}
-				}
-				c.Fix = fix
-				cs = append(cs, c)
-				break scan // 一個檔只回報一次，Fix 以整檔為單位
+			}
+			if !isConf {
+				h.others = append(h.others, e.uris...)
+				continue
+			}
+			if e.signedBy != "" && e.signedBy != r.signedBy && !seenKR[e.signedBy] {
+				seenKR[e.signedBy] = true
+				h.keyrings = append(h.keyrings, e.signedBy)
+			}
+		}
+		if len(h.conflict) > 0 {
+			hits = append(hits, h)
+			removed[pf.name] = true
+		}
+	}
+
+	// 其餘（會留下的）檔案還在引用的 keyring，不能刪。
+	stillUsed := map[string]bool{}
+	for _, pf := range files {
+		if removed[pf.name] {
+			continue
+		}
+		for _, e := range pf.entries {
+			if e.signedBy != "" {
+				stillUsed[path.Clean(e.signedBy)] = true
 			}
 		}
 	}
+
+	var cs []Conflict
+	for _, h := range hits {
+		c := Conflict{File: h.abs, URI: strings.Join(h.conflict, " ")}
+		fix := "rm " + shellQuote(h.abs)
+		if h.pf.isTarget {
+			c.Reason = fmt.Sprintf("同一個來源檔的 Signed-By 與要寫的 %q 不同", r.signedBy)
+		} else {
+			c.Reason = "同一個 URI 已出現在其他來源檔，apt 會因 Signed-By 不一致而拒讀全部來源"
+		}
+		if len(h.others) > 0 {
+			c.Reason += "；這個檔還有其他來源：" + strings.Join(h.others, " ") + "（整檔刪除會一併移除）"
+		}
+		if h.pf.isList {
+			for _, kr := range h.keyrings {
+				switch {
+				case stillUsed[path.Clean(kr)]:
+					c.Reason += fmt.Sprintf("；keyring %s 仍被其他來源使用，不建議刪", kr)
+				case !removableKeyring(kr):
+					c.Reason += fmt.Sprintf("；keyring %s 不在可清除的位置（只清 /etc/apt/keyrings/ 與 /etc/apt/trusted.gpg.d/），不建議刪", kr)
+				default:
+					fix += " && rm " + shellQuote(kr)
+				}
+			}
+		}
+		c.Fix = fix
+		cs = append(cs, c)
+	}
 	return cs, nil
+}
+
+var safeShell = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
+
+// shellQuote 讓路徑可以安全貼進 shell：安全字元原樣輸出，其餘用單引號包起來。
+func shellQuote(s string) string {
+	if safeShell.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// removableKeyring 只有明確由 provision 放置的目錄才建議刪；
+// /usr/share/keyrings 之類屬於套件，刪了會壞套件。
+func removableKeyring(k string) bool {
+	k = path.Clean(k)
+	return strings.HasPrefix(k, "/etc/apt/keyrings/") || strings.HasPrefix(k, "/etc/apt/trusted.gpg.d/")
 }
 
 // writeAtomic 先寫暫存檔再 rename，避免中斷時留下半個檔。
