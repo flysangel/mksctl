@@ -28,6 +28,8 @@ disableCloudinit_install() {
 }
 
 disableCloudinit_verify() {
+  # install 在同一個 shell 跑過 cloud-init，bash 的命令快取還記著已刪除的路徑，command -v 會誤報；先清掉
+  hash -r
   if command -v cloud-init >/dev/null; then
     echo "Error: cloud-init 仍在" >&2
     return 1
