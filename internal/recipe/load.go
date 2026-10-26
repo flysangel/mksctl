@@ -97,9 +97,28 @@ func Validate(c Catalog, defs platform.Defs) []error {
 				}
 			}
 		}
+		for _, a := range r.Artifacts {
+			if s := a.Checksum.Sigstore; s != nil {
+				validateSigstore(n, a.ID, *s, add)
+			}
+		}
 		if l := r.Latest; l != nil && (l.GitHub == "") == (l.URL == "") {
 			add("配方 %s：latest 的 github 與 url 要擇一", n)
 		}
 	}
 	return errs
+}
+
+// validateSigstore 擋住 key 與 keyless 混用或兩者都缺。keyless 只填一半也擋：
+// 只比 SAN 不比 issuer 時，任何 OIDC 提供者發的同名身分都會過。
+func validateSigstore(recipe, id string, s SigstoreSpec, add func(string, ...any)) {
+	keyless := s.Identity != "" || s.Issuer != ""
+	switch {
+	case s.Key != "" && keyless:
+		add("配方 %s：artifact %q 的 sigstore 不能同時有 key 與 identity/issuer", recipe, id)
+	case s.Key == "" && !keyless:
+		add("配方 %s：artifact %q 的 sigstore 要有 key，或有 identity 與 issuer", recipe, id)
+	case s.Key == "" && (s.Identity == "" || s.Issuer == ""):
+		add("配方 %s：artifact %q 的 sigstore keyless 要同時有 identity 與 issuer", recipe, id)
+	}
 }

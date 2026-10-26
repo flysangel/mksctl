@@ -62,3 +62,29 @@ func TestValidateRuntimeCapabilitiesAlwaysProvided(t *testing.T) {
 	c := Catalog{"x": {Name: "x", Venue: "vm", Requires: []string{"kernel", "init"}}}
 	assert.Empty(t, Validate(c, platform.Defs{}))
 }
+
+func TestValidateSigstoreKeyOrIdentity(t *testing.T) {
+	cat := func(s SigstoreSpec) Catalog {
+		return Catalog{"x": {Name: "x", Venue: "vm", Artifacts: []Artifact{{ID: "bin", URL: "https://e/x",
+			Checksum: ChecksumSpec{Sigstore: &s}}}}}
+	}
+	keyless := SigstoreSpec{Bundle: "b", Identity: "^https://e/", Issuer: "https://i"}
+	keyed := SigstoreSpec{Bundle: "b", Key: "trust/keys/x.pub"}
+	assert.Empty(t, Validate(cat(keyless), platform.Defs{}))
+	assert.Empty(t, Validate(cat(keyed), platform.Defs{}))
+
+	both := keyless
+	both.Key = "trust/keys/x.pub"
+	errs := Validate(cat(both), platform.Defs{})
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], "key")
+
+	errs = Validate(cat(SigstoreSpec{Bundle: "b"}), platform.Defs{})
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], "key")
+
+	// keyless 缺一半：只比 SAN 不比 issuer，任何 OIDC 提供者簽的都會過。
+	errs = Validate(cat(SigstoreSpec{Bundle: "b", Identity: "^https://e/"}), platform.Defs{})
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], "issuer")
+}

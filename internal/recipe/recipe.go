@@ -48,11 +48,15 @@ func (c ChecksumSpec) any() bool {
 	return c.Sigstore != nil || c.File != "" || c.Trust || c.GitHubDigest
 }
 
-// SigstoreSpec 描述 sigstore 簽章驗證。
+// SigstoreSpec 描述 sigstore 簽章驗證。Key 與 Identity/Issuer 擇一：
+// 上游用 cosign 金鑰簽時填 Key；用 keyless（Fulcio 憑證）簽時填 Identity 與 Issuer。
 type SigstoreSpec struct {
 	Bundle   string `yaml:"bundle"`
 	Identity string `yaml:"identity"`
 	Issuer   string `yaml:"issuer"`
+	// Key 是嵌入 FS 裡的公鑰路徑，例如 trust/keys/kube-linter-cosign.pub。
+	// 公鑰釘在 repo，不向上游抓：能換掉上游檔案的人，也能換掉上游的公鑰。
+	Key string `yaml:"key"`
 }
 
 // AptSource 描述要加的 apt 來源（deb822 格式）。
