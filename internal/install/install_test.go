@@ -483,3 +483,45 @@ func TestUnknownRecipeIsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, diffs)
 }
+
+// sysrootFiles 列出 sysroot 底下全部的檔與目錄，用來證明 check 什麼都沒留下。
+func sysrootFiles(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	require.NoError(t, filepath.WalkDir(root, func(p string, _ os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, p)
+		out = append(out, rel)
+		return nil
+	}))
+	return out
+}
+
+func TestCheckOnlyTouchesNothing(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	// FetchDir 留空：check 不能在 sysroot 底下建暫存目錄。
+	fx.Deps.FetchDir = ""
+	before := sysrootFiles(t, fx.Sysroot)
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"docker", "helm"}, CheckOnly: true})
+	require.NoError(t, err)
+	assert.Empty(t, diffs)
+	assert.Equal(t, before, sysrootFiles(t, fx.Sysroot))
+	assert.False(t, fx.requested("/docker.gpg"), "check 不下載 apt 金鑰")
+	assert.True(t, fx.requested("/dl/helm-"), "check 仍要下載驗證")
+	assert.Zero(t, fx.Index.RefreshCalls())
+	assert.Empty(t, fx.Runner.calls)
+}
+
+func TestCheckOnlyReportsAptConflict(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	dir := filepath.Join(fx.Sysroot, "etc/apt/sources.list.d")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker.list"),
+		[]byte("deb [signed-by=/usr/share/keyrings/other.gpg] "+fx.Deps.GitHubBase+"/docker noble stable\n"), 0o644))
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"docker"}, CheckOnly: true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"docker/apt-source-conflict"}, kinds(diffs))
+	assert.Empty(t, fx.Runner.calls)
+}

@@ -96,6 +96,9 @@ type Options struct {
 	Params          map[string]string
 	AllowUnverified bool
 	Sysroot         string
+	// CheckOnly 為 true 時，跑完第 4 步（apt 來源衝突）就返回，不寫來源、不更新索引、
+	// 不執行配方、不存狀態檔。套件名稱要等寫入來源後才查得到，所以 check 不含第 6 步。
+	CheckOnly bool
 }
 
 // plan 是一個配方這次要怎麼處理。
@@ -151,7 +154,7 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 	}
 
 	// 3. 查最新版並下載驗證。暫存目錄不算改機器：結束時一定清掉。
-	fetchDir, cleanup, err := prepareFetchDir(deps.FetchDir, sysroot)
+	fetchDir, cleanup, err := prepareFetchDir(deps.FetchDir, sysroot, opt.CheckOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -194,6 +197,9 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 	if len(diffs) > 0 {
 		preflight.Sort(diffs)
 		return diffs, nil
+	}
+	if opt.CheckOnly {
+		return nil, nil
 	}
 
 	// 5. 寫套件來源與 alpine 套件庫，再更新索引。這是檢查通過前唯一會改機器的步驟：
@@ -274,7 +280,15 @@ func loadTables(fsys fs.FS) (pkgmap.Map, fetch.TrustDB, error) {
 
 // prepareFetchDir 回傳暫存目錄與清理函式。指定的目錄只清內容、不刪本身，
 // 呼叫端可能要重用它；自己建的目錄整個刪掉。
-func prepareFetchDir(dir, sysroot string) (string, func(), error) {
+// checkOnly 時改用系統暫存目錄：check 承諾不改機器，連 sysroot 底下的快取目錄都不建。
+func prepareFetchDir(dir, sysroot string, checkOnly bool) (string, func(), error) {
+	if dir == "" && checkOnly {
+		d, err := os.MkdirTemp("", "mksctl-check-*")
+		if err != nil {
+			return "", nil, err
+		}
+		return d, func() { _ = os.RemoveAll(d) }, nil
+	}
 	if dir == "" {
 		base := filepath.Join(sysroot, "var/cache/mksctl/fetch")
 		if err := os.MkdirAll(base, 0o755); err != nil {
