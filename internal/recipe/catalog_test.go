@@ -23,6 +23,7 @@ func TestEmbeddedCatalogValid(t *testing.T) {
 }
 
 // 雜湊只能放在 trust/，散落各處的 sha256 會與可信來源脫鉤。
+// tests/verified.conf 是例外：它記的是配方內容的指紋，不是下載檔的雜湊，沒有可脫鉤的來源。
 func TestNoSha256OutsideTrust(t *testing.T) {
 	top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	require.NoError(t, err)
@@ -36,7 +37,7 @@ func TestNoSha256OutsideTrust(t *testing.T) {
 	re := regexp.MustCompile(`[0-9a-f]{64}`)
 	for _, f := range strings.Split(string(out), "\x00") {
 		if f == "" || strings.HasPrefix(f, "trust/") ||
-			strings.HasPrefix(f, "testdata/") || strings.Contains(f, "/testdata/") {
+			f == "tests/verified.conf" || strings.HasPrefix(f, "testdata/") || strings.Contains(f, "/testdata/") {
 			continue
 		}
 		b, err := exec.Command("cat", root+"/"+f).Output()

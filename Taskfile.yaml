@@ -43,3 +43,25 @@ tasks:
     desc: "[開發] 建置靜態執行檔到 dist/mksctl"
     cmds:
       - CGO_ENABLED=0 go build -o dist/mksctl ./cmd/mksctl
+
+  test:recipe:
+    desc: "[開發] 在配方宣告的場地（podman、lxc、vm）實測一個配方（用法：task test:recipe -- <配方>）"
+    summary: |
+      先 task build，再依 mksctl list --all 查到的 venue，對 tests/platforms.conf 的每個平台
+      各開一台測試機，連跑兩次 mksctl install。lxc 與 vm 層通過後更新 tests/verified.conf。
+      vm 層需要 /dev/kvm 的存取權；剛加入 kvm 群組還沒重登時，改跑 sg kvm -c 'task test:recipe -- <配方>'。
+    preconditions:
+      - { sh: "[[ -n '{{.CLI_ARGS | default \"\"}}' ]]", msg: "用法：task test:recipe -- <配方>（未提供配方）" }
+    cmds:
+      - task: build
+      - |
+        venue="$(dist/mksctl list --all | awk -v n='{{.CLI_ARGS}}' '$1 == n { print $2 }')"
+        case "${venue}" in
+        podman) exec bash tests/test_pkg.sh '{{.CLI_ARGS}}' ;;
+        lxc) exec bash tests/test_lxc.sh '{{.CLI_ARGS}}' ;;
+        vm) exec bash tests/test_vm.sh '{{.CLI_ARGS}}' ;;
+        *)
+          echo "Error: mksctl list --all 沒有配方 {{.CLI_ARGS}}，或 venue 不是 podman、lxc、vm" >&2
+          exit 1
+          ;;
+        esac
