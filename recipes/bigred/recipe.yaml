@@ -1,0 +1,4 @@
+venue: vm
+packages:
+  - sudo
+  - bash
