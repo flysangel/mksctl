@@ -1,1 +1,8 @@
-{}
+gitkraken/gitkraken:
+    url: https://release.gitkraken.com/linux/gitkraken-amd64.deb
+    size: 153238032
+    sha256: 83c2d39b1a33aa0ac27ecfcdc71f8f55f116f3a45da06188a7ce2597a0f10fba
+postman/postman:
+    url: https://dl.pstmn.io/download/latest/linux64
+    size: 208175323
+    sha256: 6f6b88c74caf41b025c6035b0439b23cc63041758b894ff93c23af709fb5efaf

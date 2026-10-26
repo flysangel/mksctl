@@ -1,0 +1,14 @@
+venue: podman
+requires:
+  - apt
+  - desktop
+packages:
+  - tar
+# 網址永遠指向最新版、沒有版本號，所以不填 latest，每次安裝都會執行。
+# 上游沒有公布雜湊，改用 trust 記錄；上游換檔時 install 會停下，修法是 task trust:refresh -- postman。
+# trust 記錄只有 amd64（已知限制）。
+artifacts:
+  - id: postman
+    url: https://dl.pstmn.io/download/latest/linux64
+    checksum:
+      trust: true
