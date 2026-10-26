@@ -105,6 +105,20 @@ var defaultFS = map[string]string{
 	"recipes/withlatest/recipe.yaml": "venue: podman\nlatest:\n  github: o/x\n",
 }
 
+// linuxDetect 讀 <sysroot>/etc/os-release，行為同 Unix 版 platform.Detect，但不受主機作業系統影響。
+func linuxDetect(sysroot string) (platform.Platform, error) {
+	b, err := os.ReadFile(filepath.Join(sysroot, "etc/os-release"))
+	if err != nil {
+		return platform.Platform{}, err
+	}
+	p, err := platform.Parse(b)
+	if err != nil {
+		return platform.Platform{}, err
+	}
+	p.InitRunning, p.InContainer = platform.DetectRuntime(sysroot)
+	return p, nil
+}
+
 func newHarness(t *testing.T, opts ...option) *harness {
 	t.Helper()
 	sysroot := t.TempDir()
@@ -127,6 +141,9 @@ func newHarness(t *testing.T, opts ...option) *harness {
 		runner:     h.runner,
 		index:      h.index,
 		version:    "dev",
+		// Linux 行為的測試在任何主機上都要測 Linux：不讀 runtime.GOOS，也不走 Windows 的平台偵測。
+		goos:   "linux",
+		detect: linuxDetect,
 	}
 	withFS(defaultFS)(h)
 	for _, o := range opts {

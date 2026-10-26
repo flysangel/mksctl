@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/flysangel/mksctl/internal/platform"
@@ -124,7 +125,9 @@ func TestWriteInstallsKeyAndWritesSources(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "KEYDATA", string(key))
 	st, _ := os.Stat(filepath.Join(root, "etc/apt/keyrings/docker.asc"))
-	assert.Equal(t, os.FileMode(0o644), st.Mode().Perm())
+	if runtime.GOOS != "windows" { // Windows 沒有 Unix 權限位元，Perm() 只分唯讀與可寫（0444／0666）。
+		assert.Equal(t, os.FileMode(0o644), st.Mode().Perm())
+	}
 
 	src, err := os.ReadFile(filepath.Join(root, "etc/apt/sources.list.d/docker.sources"))
 	require.NoError(t, err)

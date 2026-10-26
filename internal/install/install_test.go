@@ -353,6 +353,14 @@ func fakeDeps(t *testing.T, osRelease string) *fixture {
 		Now:           func() time.Time { return time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC) },
 		Stdout:        fx.Stdout,
 		FetchDir:      fx.FetchDir,
+		// 平台偵測注入成 Linux 版：Windows 主機的 platform.Detect 讀的是登錄，不是 os-release。
+		Detect: func(root string) (platform.Platform, error) {
+			p, err := platform.Parse([]byte(osRelease))
+			if err == nil {
+				p.InitRunning, p.InContainer = platform.DetectRuntime(root)
+			}
+			return p, err
+		},
 	}
 	return fx
 }

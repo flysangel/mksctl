@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -138,7 +139,9 @@ func TestUpdateDefaultIsLatest(t *testing.T) {
 	assert.Equal(t, newBinary, string(b))
 	fi, err := os.Stat(dest)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o755), fi.Mode().Perm())
+	if runtime.GOOS != "windows" { // Windows 沒有 Unix 權限位元，Perm() 只分唯讀與可寫（0444／0666）。
+		assert.Equal(t, os.FileMode(0o755), fi.Mode().Perm())
+	}
 
 	assert.Equal(t, sum(newBinary), hex.EncodeToString(v.digest))
 	assert.JSONEq(t, `{"mediaType":"fake"}`, v.bundle)

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -72,7 +73,8 @@ func TestScanForSha256(t *testing.T) {
 	write("c.txt", "x")
 	git("add", "c.txt")
 	require.NoError(t, os.Chmod(filepath.Join(dir, "c.txt"), 0))
-	if os.Geteuid() != 0 {
+	// root 讀得了 mode 0 的檔；Windows 的 Chmod 不能拿掉讀取權限，兩者都無法造出「讀不到」。
+	if os.Geteuid() != 0 && runtime.GOOS != "windows" {
 		_, err = scanForSha256(dir)
 		require.Error(t, err)
 	}
