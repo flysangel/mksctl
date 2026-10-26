@@ -6,7 +6,8 @@
 #       requires: kernel：只在完整的 VM 或實機上有意義，容器映像本來就沒有 cloud-init 在跑
 
 disableCloudinit_install() {
-  local _
+  local _ pkg
+  local pkgs=()
 
   # 等 cloud-init 首次開機流程與 apt 背景作業結束再搶 dpkg lock；
   # 否則剛開機幾分鐘內 apt-get purge 會撞 dpkg-lock-frontend，用 || true 吞掉會變成假成功
@@ -18,13 +19,24 @@ disableCloudinit_install() {
     sleep 2
   done
 
-  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 purge -y cloud-init || return 1
+  # 26.04 起 cloud-init 拆成 cloud-init 與 cloud-init-base，執行檔在 cloud-init-base；24.04 沒有後者。
+  # 只列出已安裝的，purge 不存在的套件名會報錯
+  for pkg in cloud-init cloud-init-base; do
+    if dpkg -s "${pkg}" >/dev/null 2>&1; then
+      pkgs+=("${pkg}")
+    fi
+  done
+  if [[ "${#pkgs[@]}" -gt 0 ]]; then
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 purge -y "${pkgs[@]}" || return 1
+  fi
   rm -rf /etc/cloud /var/lib/cloud || return 1
 
-  if dpkg -s cloud-init >/dev/null 2>&1; then
-    echo "Error: cloud-init 仍然安裝著" >&2
-    return 1
-  fi
+  for pkg in cloud-init cloud-init-base; do
+    if dpkg -s "${pkg}" >/dev/null 2>&1; then
+      echo "Error: ${pkg} 仍然安裝著" >&2
+      return 1
+    fi
+  done
 }
 
 disableCloudinit_verify() {
