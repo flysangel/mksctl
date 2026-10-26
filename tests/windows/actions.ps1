@@ -80,7 +80,7 @@ function Invoke-AsSystem {
         if (-not $done) { return @{ Code = -1; Out = '排程逾時' } }
         $text = ''
         if (Test-Path -LiteralPath $out) { $text = Get-Content -LiteralPath $out -Raw }
-        return @{ Code = [int]$info.LastTaskResult; Out = $text }
+        return @{ Code = [int64]$info.LastTaskResult; Out = $text }
     }
     finally {
         Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue
@@ -157,6 +157,7 @@ function Test-UserRecipe {
     Start-Service seclogon
     Get-LocalUser -Name $user -ErrorAction SilentlyContinue | Remove-LocalUser
     New-LocalUser -Name $user -Password $pw | Out-Null
+    Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $user
     $hive = 'HKU\mksctl-hive'
     try {
         $uout = Join-Path $pub 'user-out.txt'
@@ -172,12 +173,19 @@ function Test-UserRecipe {
                 $script:userReadback = $true
                 $profile = (Get-CimInstance Win32_UserProfile | Where-Object { $_.LocalPath -like "*\$user" }).LocalPath
                 $dat = Join-Path $profile 'NTUSER.DAT'
-                & reg.exe load $hive $dat | Out-Null
-                $loaded = ($LASTEXITCODE -eq 0)
+                # 行程結束後 hive 非同步卸載，剛結束就掛可能「檔案使用中」，重試最多 10 次
+                $loaded = $false
+                for ($i = 0; $i -lt 10 -and -not $loaded; $i++) {
+                    & reg.exe load $hive $dat 2>&1 | Out-Null
+                    $loaded = ($LASTEXITCODE -eq 0)
+                    if (-not $loaded) { Start-Sleep -Seconds 1 }
+                }
                 Write-Step $loaded "$Name：reg load 掛上 $user 的 NTUSER.DAT"
                 if ($loaded) {
                     try {
-                        foreach ($kv in Get-DeclaredKeys $Name) {
+                        $declared = @(Get-DeclaredKeys $Name)
+                        Write-Step ($declared.Count -gt 0) "$Name：recipe.yaml 讀得到宣告的登錄值（$($declared.Count) 筆）"
+                        foreach ($kv in $declared) {
                             $k = $kv[0] -replace '^HKCU', $hive
                             & reg.exe query $k /v $kv[1] | Out-Null
                             Write-Step ($LASTEXITCODE -eq 0) "$Name：使用者 hive 讀得到 $($kv[0])\$($kv[1])"
@@ -185,7 +193,8 @@ function Test-UserRecipe {
                     }
                     finally {
                         [gc]::Collect(); [gc]::WaitForPendingFinalizers()
-                        & reg.exe unload $hive | Out-Null
+                        & reg.exe unload $hive 2>&1 | Out-Null
+                        Write-Step ($LASTEXITCODE -eq 0) "$Name：reg unload $hive"
                     }
                 }
             }
