@@ -129,7 +129,7 @@ func (r *Runner) compose(p platform.Platform, name string, vars map[string]strin
 	for _, fn := range []string{name + "_install", name + "_verify"} {
 		re := regexp.MustCompile(`(?m)^\s*(function\s+)?` + regexp.QuoteMeta(fn) + `\s*(\(\s*\))?\s*\{`)
 		if !re.Match(data) {
-			return "", fmt.Errorf("Error: 配方缺少函式 %s", fn)
+			return "", fmt.Errorf("配方缺少函式 %s", fn)
 		}
 	}
 	fmt.Fprintf(&b, "\n# --- recipes/%s/recipe.sh ---\n%s\n", name, data)

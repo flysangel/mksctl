@@ -58,7 +58,8 @@ func TestRunMissingFunctionIsErrorBeforeExec(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, out, "TOPLEVEL_MARK")
 	assert.NotContains(t, out, "INSTALL_MARK")
-	assert.Contains(t, err.Error(), "Error:")
+	// CLI 會加 Error: 前綴，錯誤字串本身不能再帶，否則印出來是 Error: Error:。
+	assert.NotContains(t, err.Error(), "Error:")
 	assert.Contains(t, err.Error(), "demo_verify")
 	_ = errs
 }
