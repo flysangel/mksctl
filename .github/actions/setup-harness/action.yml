@@ -38,6 +38,11 @@ runs:
         sudo -E apt-get update
         sudo -E apt-get install -y --no-install-recommends lxc gnupg xz-utils rsync uidmap dnsmasq-base iptables
         sudo systemctl start lxc-net || true
+        # runner 上的 docker 把 FORWARD 預設設成 DROP，容器出不了 lxcbr0；放行 lxcbr0 進出的轉送
+        sudo sysctl -w net.ipv4.ip_forward=1
+        sudo iptables -I FORWARD -i lxcbr0 -j ACCEPT
+        sudo iptables -I FORWARD -o lxcbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+        ip addr show lxcbr0
     - name: 開放 /dev/kvm 權限
       if: inputs.venue == 'vm'
       shell: bash
