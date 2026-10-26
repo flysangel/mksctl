@@ -204,6 +204,7 @@ artifacts:
 	"other":     "venue: podman\n",
 	"gpu":       "venue: vm\nrequires: [gpu]\n",
 	"pkgs":      "venue: podman\npackages: [curl, nope, ghost]\n",
+	"curlpkg":   "venue: podman\npackages: [curl]\n",
 }
 
 func fakeDeps(t *testing.T, osRelease string) *fixture {
@@ -406,6 +407,7 @@ func TestRunJSONEnvAndCleanup(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, entries, "暫存目錄要清空")
 	assert.Equal(t, "v3.19.0", fx.state(t).Recipes["helm"].Version)
+	assert.Zero(t, fx.Index.RefreshCalls(), "只下載的配方不更新索引")
 }
 
 func TestExcludeUsesReplacement(t *testing.T) {
@@ -469,12 +471,33 @@ func TestSkipWhenSameVersion(t *testing.T) {
 
 func TestAlpineRepositoriesWritten(t *testing.T) {
 	fx := fakeDeps(t, "ID=alpine\nVERSION_ID=3.22.1\n")
-	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"other"}})
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"curlpkg"}})
 	require.NoError(t, err)
 	assert.Empty(t, diffs)
 	b, err := os.ReadFile(filepath.Join(fx.Sysroot, "etc/apk/repositories"))
 	require.NoError(t, err)
 	assert.Equal(t, "https://dl-cdn.example/v3.22/community\n", string(b))
+	assert.Equal(t, 1, fx.Index.RefreshCalls())
+}
+
+// 只下載執行檔、不裝套件的配方，不該改 /etc/apk/repositories，也不更新索引。
+func TestAlpineDownloadOnlyTouchesNoRepositories(t *testing.T) {
+	fx := fakeDeps(t, "ID=alpine\nVERSION_ID=3.22.1\n")
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"helm", "other"}})
+	require.NoError(t, err)
+	assert.Empty(t, diffs)
+	assert.NoFileExists(t, filepath.Join(fx.Sysroot, "etc/apk/repositories"))
+	assert.Zero(t, fx.Index.RefreshCalls())
+	assert.Equal(t, []string{"helm", "other"}, fx.Runner.calls)
+}
+
+// 有配方要裝套件時，即使同一次也有只下載的配方，仍要寫套件庫並更新一次索引。
+func TestAlpineMixedRunStillRefreshes(t *testing.T) {
+	fx := fakeDeps(t, "ID=alpine\nVERSION_ID=3.22.1\n")
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"helm", "curlpkg"}})
+	require.NoError(t, err)
+	assert.Empty(t, diffs)
+	assert.FileExists(t, filepath.Join(fx.Sysroot, "etc/apk/repositories"))
 	assert.Equal(t, 1, fx.Index.RefreshCalls())
 }
 

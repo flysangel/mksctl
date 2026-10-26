@@ -219,6 +219,7 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 
 	// 5. 寫套件來源與 alpine 套件庫，再更新索引。這是檢查通過前唯一會改機器的步驟：
 	//    不先寫來源，就無法確認來源裡的套件（例如 docker-ce）查得到。
+	//    沒有要跑的配方用到套件時，這一步什麼都不做。
 	idx := deps.Index
 	if idx == nil {
 		idx = pkgindex.For(p)
@@ -382,6 +383,12 @@ func usesAptSource(pl plan, p platform.Platform) bool {
 func prepareSources(ctx context.Context, hc *http.Client, sysroot string, p platform.Platform,
 	defs platform.Defs, plans []plan, idx pkgindex.Index,
 ) error {
+	// 這次沒有任何要跑的配方需要套件，就不寫套件庫也不更新索引：
+	// 只下載執行檔的配方（例如 helm）不該替使用者改 /etc/apk/repositories，
+	// 也不必多等一次 apt-get update。
+	if !needsPackages(plans, p) {
+		return nil
+	}
 	if hc == nil {
 		hc = http.DefaultClient
 	}
@@ -412,6 +419,20 @@ func prepareSources(ctx context.Context, hc *http.Client, sysroot string, p plat
 		}
 	}
 	return nil
+}
+
+// needsPackages 回報這次是否有要跑的配方會用到套件：宣告了 packages，
+// 或宣告了在這個平台適用的 apt_source。
+func needsPackages(plans []plan, p platform.Platform) bool {
+	for _, pl := range plans {
+		if pl.action != state.Run {
+			continue
+		}
+		if len(pl.r.Packages) > 0 || usesAptSource(pl, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeRunFile(path string, rf RunFile) error {
