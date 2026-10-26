@@ -18,10 +18,19 @@ pkg_install() {
 
 # _svc_enable <服務> — openrc 開機啟用
 _svc_enable() {
+  # 沒有 init 工具（例如容器）時略過，不算失敗
+  command -v rc-update >/dev/null || {
+    echo "Info: 沒有 rc-update，略過啟用 $1" >&2
+    return 0
+  }
   rc-update add "$1" default || return 1
 }
 
 # _svc_start <服務> — openrc 立即啟動
 _svc_start() {
+  command -v rc-service >/dev/null || {
+    echo "Info: 沒有 rc-service，略過啟動 $1" >&2
+    return 0
+  }
   rc-service "$1" start || return 1
 }

@@ -18,6 +18,7 @@ _base_install_alpine() {
   # DNS：不讓 udhcpc 蓋掉 resolv.conf，固定用下面兩台
   mkdir -p /etc/udhcpc || return 1
   printf 'RESOLV_CONF="NO"\n' >/etc/udhcpc/udhcpc.conf || return 1
+  # 刻意覆寫 /etc/resolv.conf（沿用舊 base 行為）：固定 DNS，不依賴 DHCP 給的
   printf 'nameserver 168.95.1.1\nnameserver 8.8.8.8\n' >/etc/resolv.conf || return 1
   # community 與 edge 套件庫由 platforms/apk.yaml 與 alpine-<版本>.yaml 的 repositories 寫入
 
@@ -25,13 +26,27 @@ _base_install_alpine() {
 
   # 計畫 3：MKS 儀表板（inittab、/mks/bin、/mks/dialog）改由 mksctl dashboard 提供
 
-  # open-vm-tools 在非 VMware 的 hypervisor 上會啟動失敗，容許失敗
-  svc_enable open-vm-tools || echo "Warning: open-vm-tools 啟動失敗（非 VMware 環境屬正常）" >&2
-  svc_enable qemu-guest-agent || return 1
+  _base_guest_tools open-vm-tools open-vm-tools-guestinfo qemu-guest-agent || return 1
+}
+
+# _base_guest_tools <邏輯套件>... — VM 專屬工具：只在 init 在跑（真的 VM）時安裝並啟用
+# 這幾個套件仍列在 recipe.yaml 的 packages，讓 preflight 查得到；但容器沒有 init，
+# images 的 Dockerfile 會在容器裡裝 base，裝了只會變胖，所以沒有 init 就整段略過。
+# 啟動失敗只警告：open-vm-tools 在非 VMware 會起不來，guest agent 沒有 virtio 通道也起不來。
+_base_guest_tools() {
+  local p
+  if [[ "${MKSCTL_INIT_RUNNING:-0}" != "1" ]]; then
+    echo "Info: 沒有 init，略過 VM 專屬工具" >&2
+    return 0
+  fi
+  pkg_install "$@" || return 1
+  for p in open-vm-tools qemu-guest-agent; do
+    svc_enable "${p}" || echo "Info: ${p} 啟用或啟動失敗，略過" >&2
+  done
 }
 
 _base_install_ubuntu() {
-  local f
+  local p
 
   # 更新套件期間以非互動方式重啟服務
   if [[ -f /etc/needrestart/needrestart.conf ]]; then
@@ -48,17 +63,17 @@ _base_install_ubuntu() {
     fi
     sed -i 's|ENABLED=1|ENABLED=0|g' /etc/default/motd-news || return 1
   fi
-  for f in /etc/update-motd.d/*; do
-    [[ -f "${f}" ]] || continue
-    chmod -x "${f}" || return 1
+  for p in /etc/update-motd.d/*; do
+    [[ -f "${p}" ]] || continue
+    chmod -x "${p}" || return 1
   done
 
   # rsyslog 與 inetutils-syslogd 互相衝突：已有 inetutils-syslogd 就不裝 rsyslog
   # 套件清單裡的 rsyslog 在這裡單獨處理，其餘照單安裝
   if dpkg-query -W -f='${Status}' inetutils-syslogd 2>/dev/null | grep -q '^install ok installed$'; then
     local pkgs=()
-    for f in "${_BASE_PACKAGES[@]}"; do
-      [[ "${f}" == "rsyslog" ]] || pkgs+=("${f}")
+    for p in "${_BASE_PACKAGES[@]}"; do
+      [[ "${p}" == "rsyslog" ]] || pkgs+=("${p}")
     done
     pkg_install "${pkgs[@]}" || return 1
   else
@@ -67,7 +82,7 @@ _base_install_ubuntu() {
 
   # 計畫 3：MKS 儀表板（mks.service、/mks/bin、/mks/dialog、停用 getty@tty1）改由 mksctl dashboard 提供
 
-  svc_enable qemu-guest-agent || return 1
+  _base_guest_tools open-vm-tools qemu-guest-agent || return 1
 }
 
 base_install() {
@@ -80,7 +95,6 @@ base_install() {
     util-linux coreutils findutils binutils iputils procps
     tini
     software-properties-common rsyslog net-tools iproute2 iftop traceroute
-    open-vm-tools open-vm-tools-guestinfo qemu-guest-agent
   )
 
   case "${OS_ID}" in
@@ -97,7 +111,7 @@ base_install() {
 
 base_verify() {
   local cmd
-  for cmd in bash curl jq git sudo envsubst tini sshpass dialog inotifywait vmtoolsd shellcheck; do
+  for cmd in bash curl jq git sudo envsubst tini sshpass dialog inotifywait shellcheck; do
     command -v "${cmd}" >/dev/null || {
       echo "Error: 找不到 ${cmd}" >&2
       return 1
@@ -112,17 +126,6 @@ base_verify() {
   if [[ "${OS_ID}" == "alpine" ]]; then
     grep -q '^nameserver 168.95.1.1$' /etc/resolv.conf || {
       echo "Error: /etc/resolv.conf 沒有 nameserver 168.95.1.1" >&2
-      return 1
-    }
-  fi
-
-  # init 在跑時，qemu guest agent 必須是啟動狀態
-  if [[ "${MKSCTL_INIT_RUNNING:-0}" == "1" ]]; then
-    case "${OS_ID}" in
-    alpine) rc-service qemu-guest-agent status >/dev/null ;;
-    *) systemctl is-active --quiet qemu-guest-agent ;;
-    esac || {
-      echo "Error: qemu-guest-agent 沒有在跑" >&2
       return 1
     }
   fi
