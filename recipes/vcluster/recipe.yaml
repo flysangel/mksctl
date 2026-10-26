@@ -1,0 +1,10 @@
+venue: podman
+latest:
+  github: loft-sh/vcluster
+artifacts:
+  - id: vcluster
+    url: https://github.com/loft-sh/vcluster/releases/download/{{.Version}}/vcluster-linux-{{.Arch}}
+    checksum:
+      # checksums.txt 同時列了 syncer-linux-*、vcluster-linux-*-standalone 等檔；
+      # fetch 以檔名精確比對那一行
+      file: https://github.com/loft-sh/vcluster/releases/download/{{.Version}}/checksums.txt

@@ -1,0 +1,10 @@
+venue: podman
+latest:
+  github: kubernetes-sigs/kustomize
+artifacts:
+  - id: kustomize
+    # tag 是 kustomize/vX.Y.Z（monorepo 的前綴）；latest 取轉址最後一段，得到 vX.Y.Z。
+    # 下載網址的 tag 要把斜線編成 %2F
+    url: https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F{{.Version}}/kustomize_{{.Version}}_linux_{{.Arch}}.tar.gz
+    checksum:
+      file: https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F{{.Version}}/checksums.txt

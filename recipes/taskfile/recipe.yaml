@@ -1,0 +1,8 @@
+venue: podman
+latest:
+  github: go-task/task
+artifacts:
+  - id: taskfile
+    url: https://github.com/go-task/task/releases/download/{{.Version}}/task_linux_{{.Arch}}.tar.gz
+    checksum:
+      file: https://github.com/go-task/task/releases/download/{{.Version}}/task_checksums.txt
