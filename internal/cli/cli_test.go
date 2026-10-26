@@ -313,6 +313,20 @@ func TestListPlatform(t *testing.T) {
 	assert.Equal(t, "gpu\nhelm\nwithlatest\nxfce\n", out)
 }
 
+func TestListPlatformWindows11(t *testing.T) {
+	files := map[string]string{
+		"platforms/windows.yaml":        "provides: [windows]\n",
+		"platforms/windows-client.yaml": "provides: []\n",
+		"platforms/windows-11.yaml":     "provides: []\n",
+		"recipes/winx/recipe.yaml":      "venue: vm\nrequires: [windows]\n",
+		"recipes/helm/recipe.yaml":      "venue: podman\nrequires: [systemd]\n",
+	}
+	code, out, errOut := runCLI(t, withFS(files), "list", "--platform", "windows-11")
+	require.Equal(t, 0, code, errOut)
+	assert.Equal(t, "winx\n", out)
+	assert.NotContains(t, out, "helm")
+}
+
 func TestListPlatformBad(t *testing.T) {
 	code, _, errOut := runCLI(t, "list", "--platform", "fedora-40")
 	assert.Equal(t, 1, code)

@@ -417,6 +417,14 @@ func cmdList(e env, args []string, stdout io.Writer) error {
 // platformFromLayer 用層名合成 os-release 再解析，規則才跟真實機器一致。
 // 執行環境假設是 VM（有 init、不在容器）：harness 在主機上問的是「VM 裡能裝什麼」。
 func platformFromLayer(layer string) (platform.Platform, error) {
+	if strings.HasPrefix(layer, "windows-") {
+		// Windows 沒有 os-release，改查 build 對照表，再走與真機相同的 WindowsPlatform。
+		typ, build, ok := platform.WindowsLayerFor(layer)
+		if !ok {
+			return platform.Platform{}, fmt.Errorf("不認得的 Windows 平台層：%q", layer)
+		}
+		return platform.WindowsPlatform(typ, build), nil
+	}
 	i := strings.LastIndex(layer, "-")
 	if i <= 0 || i == len(layer)-1 {
 		return platform.Platform{}, fmt.Errorf("平台層要寫成 <發行版>-<版本>，例如 ubuntu-26.04：%q", layer)
