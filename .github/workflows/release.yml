@@ -1,0 +1,120 @@
+name: release
+on:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: 裝 shfmt 與 shellcheck
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
+        run: |
+          go install mvdan.cc/sh/v3/cmd/shfmt@v3.8.0
+          sudo -E apt-get update
+          sudo -E apt-get install -y --no-install-recommends shellcheck
+          echo "$(go env GOPATH)/bin" >>"${GITHUB_PATH}"
+      - name: task lint
+        run: task lint
+      - name: task test
+        run: task test
+  smoke:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        venue: [podman, lxc, vm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-harness
+        with:
+          venue: ${{ matrix.venue }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: 實測 ${{ matrix.venue }} 層的全部配方
+        env:
+          VENUE: ${{ matrix.venue }}
+          MKSCTL_TEST_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          task build
+          failed=()
+          while read -r name venue _; do
+            if [[ "${venue}" != "${VENUE}" ]]; then
+              continue
+            fi
+            echo "::group::${name}"
+            task test:recipe -- "${name}" || failed+=("${name}")
+            echo "::endgroup::"
+          done < <(./dist/mksctl list --all)
+          if ((${#failed[@]} > 0)); then
+            echo "Error: ${VENUE} 層失敗的配方：${failed[*]}" >&2
+            exit 1
+          fi
+  build:
+    needs: [check, smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: 建置並產生 checksums.txt
+        run: |
+          task build VERSION="${GITHUB_REF_NAME}"
+          mkdir -p out
+          cp dist/mksctl out/mksctl-linux-amd64
+          cp bin/install.sh out/install.sh
+          cd out
+          sha256sum mksctl-linux-amd64 >checksums.txt
+          cat checksums.txt
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: out/mksctl-linux-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: out/
+          if-no-files-found: error
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: out
+      - name: 建立 GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cd out
+          gh release create "${GITHUB_REF_NAME}" mksctl-linux-amd64 checksums.txt install.sh \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "mksctl ${GITHUB_REF_NAME}。驗證：sha256sum -c checksums.txt；來源證明：gh attestation verify mksctl-linux-amd64 --repo ${GITHUB_REPOSITORY}"

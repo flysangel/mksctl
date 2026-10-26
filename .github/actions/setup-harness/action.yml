@@ -1,0 +1,57 @@
+name: setup-harness
+description: 裝實測 harness 在 runner 上需要的工具；依場地（podman、lxc、vm）多裝各層的相依
+inputs:
+  venue:
+    description: 要跑的場地，podman、lxc 或 vm
+    required: true
+  github-token:
+    description: 寫進測試機 /etc/mksctl/github-token 的 token，經 MKSCTL_TEST_GITHUB_TOKEN 交給 harness
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+    - uses: arduino/setup-task@v2
+      with:
+        version: 3.x
+        repo-token: ${{ inputs.github-token }}
+    - name: 裝 podman
+      if: inputs.venue == 'podman'
+      shell: bash
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        NEEDRESTART_MODE: a
+      run: |
+        if ! command -v podman >/dev/null; then
+          sudo -E apt-get update
+          sudo -E apt-get install -y --no-install-recommends podman
+        fi
+    - name: 裝 lxc-utils
+      if: inputs.venue == 'lxc'
+      shell: bash
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        NEEDRESTART_MODE: a
+      run: |
+        sudo -E apt-get update
+        sudo -E apt-get install -y --no-install-recommends lxc lxc-utils gnupg xz-utils rsync uidmap dnsmasq-base iptables
+        sudo systemctl start lxc-net || true
+    - name: 開放 /dev/kvm 權限
+      if: inputs.venue == 'vm'
+      shell: bash
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm || true
+        ls -l /dev/kvm
+    - name: 裝 qemu 工具
+      if: inputs.venue == 'vm'
+      shell: bash
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        NEEDRESTART_MODE: a
+      run: |
+        sudo -E apt-get update
+        sudo -E apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils virtiofsd

@@ -40,11 +40,18 @@ tasks:
     cmds:
       - go test ./...
       - bash tests/test_install.sh
+      - bash tests/test_check_verified.sh
+
+  check:verified:
+    desc: "[開發] 查 lxc 與 vm 配方的已驗紀錄是否齊全、雜湊相符、7 天內（本機工具，發版 workflow 不用）"
+    cmds:
+      - task: build
+      - bash bin/check-verified.sh
 
   build:
-    desc: "[開發] 建置靜態執行檔到 dist/mksctl"
+    desc: "[開發] 建置靜態執行檔到 dist/mksctl（發版用 task build VERSION=<tag> 寫入版本）"
     cmds:
-      - CGO_ENABLED=0 go build -o dist/mksctl ./cmd/mksctl
+      - CGO_ENABLED=0 go build -ldflags "-X github.com/flysangel/mksctl/internal/cli.Version={{.VERSION | default "dev"}}" -o dist/mksctl ./cmd/mksctl
 
   test:recipe:
     desc: "[開發] 在配方宣告的場地（podman、lxc、vm）實測一個配方（用法：task test:recipe -- <配方>）"

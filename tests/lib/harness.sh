@@ -102,15 +102,25 @@ distro_of() {
 }
 
 # boot_cmd <平台層> — 測試機裡先裝 bash（配方是 bash 腳本）與憑證（fetch 走 TLS）
+# 環境變數 MKSCTL_TEST_GITHUB_TOKEN 只有這個 harness 讀：有值時，接著把它寫進測試機的
+# /etc/mksctl/github-token，mksctl 才會帶 token 打 GitHub API（避開共用 IP 的限流）。
+# 發版與排程 workflow 把 GITHUB_TOKEN 放進這個變數；本機不設就不寫。
 boot_cmd() {
+  local cmd token_cmd=""
+
   case "$(distro_of "$1")" in
-  alpine) printf '%s\n' 'apk add --no-cache bash ca-certificates >/dev/null 2>&1' ;;
-  ubuntu) printf '%s\n' 'export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq ca-certificates >/dev/null' ;;
+  alpine) cmd='apk add --no-cache bash ca-certificates >/dev/null 2>&1' ;;
+  ubuntu) cmd='export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq ca-certificates >/dev/null' ;;
   *)
     echo "Error: 不認得的平台層 $1" >&2
     return 1
     ;;
   esac
+  if [[ -n "${MKSCTL_TEST_GITHUB_TOKEN:-}" ]]; then
+    # token 只含 [A-Za-z0-9_]，單引號包起來即可
+    token_cmd=" && mkdir -p /etc/mksctl && printf '%s' '${MKSCTL_TEST_GITHUB_TOKEN}' >/etc/mksctl/github-token && chmod 600 /etc/mksctl/github-token"
+  fi
+  printf '%s%s\n' "${cmd}" "${token_cmd}"
 }
 
 # install_twice_cmd <配方> — 印一段 POSIX sh：連跑兩次 install，任一次非 0 就用該結束碼離開
