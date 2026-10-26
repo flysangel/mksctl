@@ -37,6 +37,7 @@ _svc_start() {
 
 # time_sync_enable — alpine 固定用 busybox 的 ntpd（OpenRC 服務）
 time_sync_enable() {
+  echo "Info: 啟用時間同步服務 ntpd" >&2
   svc_enable ntpd || return 1
 }
 

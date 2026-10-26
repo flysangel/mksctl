@@ -21,6 +21,7 @@ time_sync_enable() {
     pkg_install systemd-timesyncd || return 1
     svc=systemd-timesyncd
   fi
+  echo "Info: 啟用時間同步服務 ${svc}" >&2
   svc_enable "${svc}" || return 1
 }
 

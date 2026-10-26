@@ -13,5 +13,6 @@ time_sync_enable() {
     pkg_install chrony || return 1
     svc=chrony
   fi
+  echo "Info: 啟用時間同步服務 ${svc}" >&2
   svc_enable "${svc}" || return 1
 }
