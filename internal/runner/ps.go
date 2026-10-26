@@ -30,10 +30,11 @@ type PSRunner struct {
 
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
-// psPreamble 是每支腳本的前文：遇錯即停、嚴格模式、未處理的錯誤一律以 exit 1 收斂。
+// psPreamble 是每支腳本的前文：遇錯即停、嚴格模式、主控台輸出改 UTF-8（PS 5.1 預設 OEM 碼頁，繁中會變 ?）、未處理的錯誤一律以 exit 1 收斂。
 // 不用 Write-Error：Error: 走 stderr，exit 碼只用 1。
 const psPreamble = "$ErrorActionPreference = 'Stop'\n" +
 	"Set-StrictMode -Version Latest\n" +
+	"[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding\n" +
 	"trap { [Console]::Error.WriteLine(\"Error: $($_.Exception.Message)\"); exit 1 }\n"
 
 // psQuote 用單引號字面值包住值；PowerShell 單引號內只有 ' 需要加倍。

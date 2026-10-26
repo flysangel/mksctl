@@ -3,25 +3,48 @@
 
 # Invoke-Native 執行原生命令，非零離開碼就 throw。
 # powercfg、reg.exe 等的非零離開碼不會觸發 trap，所以一律經這裡。
+# PS 5.1 在 ErrorActionPreference=Stop 下，會把原生命令寫到 stderr 的每一行升級成終止錯誤，
+# 所以呼叫期間暫時改 Continue，成敗只看 $LASTEXITCODE；stderr 原樣轉發到 stderr。
 function Invoke-Native {
     param(
         [Parameter(Mandatory = $true, Position = 0)][string]$Exe,
         [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments
     )
-    & $Exe @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Exe 離開碼 $LASTEXITCODE"
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Exe @Arguments 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { [Console]::Error.WriteLine($_.ToString()) } else { $_ }
+        }
+        $code = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($code -ne 0) {
+        throw "$Exe 離開碼 $code"
     }
 }
 
-# Get-Fetched 呼叫 mksctl fetch，回傳已驗證檔案的路徑。
+# Get-Fetched 呼叫 mksctl fetch，回傳已驗證檔案的路徑（只收 stdout，stderr 轉發）。
 function Get-Fetched {
     param([Parameter(Mandatory = $true)][string]$Id)
-    $path = & $env:MKSCTL_BIN fetch $Id
-    if ($LASTEXITCODE -ne 0) {
-        throw "mksctl fetch $Id 離開碼 $LASTEXITCODE"
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $lines = @()
+    try {
+        & $env:MKSCTL_BIN fetch $Id 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { [Console]::Error.WriteLine($_.ToString()) } else { $lines += [string]$_ }
+        }
+        $code = $LASTEXITCODE
     }
-    return ($path | Select-Object -Last 1)
+    finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($code -ne 0) {
+        throw "mksctl fetch $Id 離開碼 $code"
+    }
+    return ($lines | Select-Object -Last 1)
 }
 
 # Set-ServiceStartup 設定服務的啟動類型。

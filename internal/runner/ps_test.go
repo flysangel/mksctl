@@ -29,6 +29,7 @@ func TestComposePSHasBOMAndPreamble(t *testing.T) {
 	s := string(b[3:])
 	assert.Contains(t, s, "$ErrorActionPreference = 'Stop'")
 	assert.Contains(t, s, "Set-StrictMode -Version Latest")
+	assert.Contains(t, s, "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding")
 	assert.True(t, strings.HasSuffix(strings.TrimSpace(s), "demo_install\ndemo_verify"))
 	// 由通用到具體：windows 在 windows-server 之前，recipe 在最後。
 	assert.Less(t, strings.Index(s, "function Invoke-Native"), strings.Index(s, "# server layer"))
