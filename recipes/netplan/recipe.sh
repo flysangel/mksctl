@@ -16,8 +16,8 @@ _netplan_is_dhcp() {
 # _netplan_wait_route — 最多等 30 秒，每秒查一次預設路由
 # dhcp-identifier 一變，networkd 會重做 DHCP，netplan apply 回傳時路由可能還沒回來
 _netplan_wait_route() {
-  local attempt
-  for attempt in $(seq 1 30); do
+  local _
+  for _ in $(seq 1 30); do
     if ip route | grep -q default; then
       return 0
     fi
