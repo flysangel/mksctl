@@ -70,7 +70,7 @@ type Result struct {
 func (u *Updater) Update(ctx context.Context, tag, current, dest string) (Result, error) {
 	res := Result{From: current, To: tag}
 	if tag != "" {
-		if _, ok := parseVersion(tag); !ok || !strings.HasPrefix(tag, "v") {
+		if !validTag(tag) {
 			return res, fmt.Errorf("--tag 要寫成 vX.Y.Z：%q", tag)
 		}
 	} else {
@@ -78,18 +78,21 @@ func (u *Updater) Update(ctx context.Context, tag, current, dest string) (Result
 		if err != nil {
 			return res, err
 		}
+		// 最新版的 tag 也會拼進網址，跟 --tag 用同一道檢查。
+		if !validTag(latest) {
+			return res, fmt.Errorf("最新版的 tag 不是 vX.Y.Z：%q", latest)
+		}
 		res.To = latest
 		if latest == current {
 			res.UpToDate = true
 			return res, nil
 		}
+		tag = latest
 	}
 
-	// 有 tag 時從該版下載；沒有時走 latest/download，與 install.sh 相同。
-	base := u.Client.Base() + "/" + Repo + "/releases/latest/download/"
-	if tag != "" {
-		base = u.Client.Base() + "/" + Repo + "/releases/download/" + tag + "/"
-	}
+	// 一律從查到的那一版下載，不走 latest/download：查版本與下載之間若剛好發了新版，
+	// latest/download 會拿到另一版，回報的版本就跟裝上去的不一樣。
+	base := u.Client.Base() + "/" + Repo + "/releases/download/" + tag + "/"
 
 	// 暫存檔放在 dest 同一個目錄：最後的 rename 才在同一個檔案系統內，換檔是原子的。
 	tmp, err := os.CreateTemp(filepath.Dir(dest), ".mksctl.new.*")
@@ -138,6 +141,12 @@ func (u *Updater) Update(ctx context.Context, tag, current, dest string) (Result
 	}
 	committed = true
 	return res, nil
+}
+
+// validTag 檢查 tag 是 vX.Y.Z。與 release.yml 的 tag 檢查同一個格式。
+func validTag(tag string) bool {
+	_, ok := parseVersion(tag)
+	return ok && strings.HasPrefix(tag, "v")
 }
 
 // download 把 url 的內容寫進 w。limit 小於 0 表示不限制大小。

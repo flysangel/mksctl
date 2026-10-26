@@ -29,6 +29,7 @@ type releaseServer struct {
 	paths     []string
 	authz     map[string]string
 	checksums string // 空字串時用 newBinary 的正確雜湊
+	latest    string // 空字串時最新版是 v0.2.0
 }
 
 func (s *releaseServer) seen() []string {
@@ -49,15 +50,18 @@ func newReleaseServer(t *testing.T) *releaseServer {
 		s.mu.Lock()
 		s.paths = append(s.paths, r.URL.Path)
 		s.authz[r.URL.Path] = r.Header.Get("Authorization")
-		checksums := s.checksums
+		checksums, latest := s.checksums, s.latest
 		s.mu.Unlock()
+		if latest == "" {
+			latest = "v0.2.0"
+		}
 		if checksums == "" {
 			checksums = sum(newBinary) + "  mksctl-linux-amd64\n"
 		}
 		p := r.URL.Path
 		switch {
 		case p == "/flysangel/mksctl/releases/latest":
-			http.Redirect(w, r, "/flysangel/mksctl/releases/tag/v0.2.0", http.StatusFound)
+			http.Redirect(w, r, "/flysangel/mksctl/releases/tag/"+latest, http.StatusFound)
 		case strings.HasSuffix(p, "/mksctl-linux-amd64"):
 			fmt.Fprint(w, newBinary)
 		case strings.HasSuffix(p, "/checksums.txt"):
@@ -124,8 +128,10 @@ func TestUpdateDefaultIsLatest(t *testing.T) {
 	res, err := u.Update(context.Background(), "", "v0.1.0", dest)
 	require.NoError(t, err)
 	assert.Equal(t, Result{From: "v0.1.0", To: "v0.2.0"}, res)
-	assert.Contains(t, srv.seen(), "/flysangel/mksctl/releases/latest/download/mksctl-linux-amd64")
-	assert.Contains(t, srv.seen(), "/flysangel/mksctl/releases/latest/download/checksums.txt")
+	// 從查到的那一版下載，回報的版本才等於裝上去的版本。
+	assert.Contains(t, srv.seen(), "/flysangel/mksctl/releases/download/v0.2.0/mksctl-linux-amd64")
+	assert.Contains(t, srv.seen(), "/flysangel/mksctl/releases/download/v0.2.0/checksums.txt")
+	assert.NotContains(t, srv.seen(), "/flysangel/mksctl/releases/latest/download/mksctl-linux-amd64")
 
 	b, err := os.ReadFile(dest)
 	require.NoError(t, err)
@@ -152,6 +158,15 @@ func TestUpdateRejectsBadTag(t *testing.T) {
 	_, err := u.Update(context.Background(), "../v1", "v0.1.0", dest)
 	require.Error(t, err)
 	assert.Empty(t, srv.seen())
+	assertUnchanged(t, dest)
+}
+
+func TestUpdateRejectsBadLatestTag(t *testing.T) {
+	srv, u, dest := setup(t, &fakeVerifier{})
+	srv.latest = "v0.3.0-rc1"
+	_, err := u.Update(context.Background(), "", "v0.1.0", dest)
+	require.ErrorContains(t, err, "v0.3.0-rc1")
+	assert.Equal(t, []string{"/flysangel/mksctl/releases/latest"}, srv.seen())
 	assertUnchanged(t, dest)
 }
 
