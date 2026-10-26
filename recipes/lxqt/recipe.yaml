@@ -1,0 +1,33 @@
+# 桌面環境 lxqt：lxqt-core 加 xrdp，遠端桌面用。只有 ubuntu 提供 desktop 能力，alpine 自動略過。
+# 舊版反串 aconfig；現在用 needs 先跑整條 aconfig 鏈。
+# params 的預設值是方便值（desktop／desktop520），已知限制；要換就在安裝時用 --set 帶入。
+# 舊版最後會裝 MKS（zenity 佈建選單）；MKS 不搬進 mksctl，所以這裡不裝。
+venue: vm
+needs:
+  - aconfig
+requires:
+  - apt
+  - desktop
+params:
+  - XRDP_USER
+  - XRDP_PASSWD
+packages:
+  - xserver-xorg
+  - xserver-xorg-legacy
+  - xorgxrdp
+  - lxqt-core
+  - xinit
+  - lxqt-theme-debian
+  - openbox
+  - xrdp
+  - xtightvncviewer
+  - dbus-x11
+  - fcitx5
+  - fcitx5-chewing
+  - fcitx5-chinese-addons
+  - numlockx
+  - fonts-wqy-zenhei
+  - language-pack-zh-hant
+  - language-pack-gnome-zh-hant
+  - zenity
+  - xterm
