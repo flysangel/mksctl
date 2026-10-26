@@ -12,7 +12,13 @@
 - `tests/verified.conf` 的 lxc 與 vm 紀錄已過期（內容雜湊涵蓋 Go 原始碼，引擎修改之後讓它失效），`task check:verified` 會失敗。發版前要在本機重跑受影響配方。
 - 還沒有 tag。
 
-## 2. 待辦
+## 2. 進行中
+
+- 分支 `feat/windows`：計畫 4，把 provision-windows 併入成 Windows 平台。計畫與設計文件只存本機，在主工作樹的 `docs/superpowers/` 底下。
+- 做到哪：計畫 4 的 Task 2（Windows 平台判斷）、Task 3（參數改走子行程環境變數）、Task 5（宣告式登錄值執行器）已完成並通過審查。Windows 專屬的測試只驗過能編譯，要等 Task 8 的 `windows.yml` 在 Actions 上實跑。
+- 下一步：等計畫 2 的引擎前置分支 merge 回 main，把本分支 rebase 上去，再做 Task 1、4、6、7。
+
+## 3. 待辦
 
 ### 計畫 2：其餘配方
 
