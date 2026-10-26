@@ -456,7 +456,11 @@ func cmdList(e env, args []string, stdout io.Writer) error {
 			return err
 		}
 	} else {
-		if p, err = platform.Detect(e.sysroot); err != nil {
+		detect := e.detect
+		if detect == nil {
+			detect = platform.Detect
+		}
+		if p, err = detect(e.sysroot); err != nil {
 			return err
 		}
 	}

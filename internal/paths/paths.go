@@ -3,7 +3,7 @@
 package paths
 
 import (
-	"path/filepath"
+	"path"
 	"strings"
 
 	"github.com/flysangel/mksctl/internal/identity"
@@ -46,13 +46,14 @@ func For(goos, sysroot string, id identity.Identity, getenv func(string) string)
 			TokenFile:    winJoin(programData, "github-token"),
 		}
 	}
-	state := filepath.Join(sysroot, "var/lib/mksctl/state.json")
+	// Linux 目標的路徑固定用 /，不依賴執行的主機（對稱於上面 Windows 固定用反斜線）。
+	state := path.Join(sysroot, "var/lib/mksctl/state.json")
 	return Set{
 		MachineState: state,
 		UserState:    state,
-		FetchRoot:    filepath.Join(sysroot, "var/cache/mksctl/fetch"),
-		TUFCache:     filepath.Join(sysroot, "var/cache/mksctl/tuf"),
-		TokenFile:    filepath.Join(sysroot, "etc/mksctl/github-token"),
+		FetchRoot:    path.Join(sysroot, "var/cache/mksctl/fetch"),
+		TUFCache:     path.Join(sysroot, "var/cache/mksctl/tuf"),
+		TokenFile:    path.Join(sysroot, "etc/mksctl/github-token"),
 	}
 }
 
