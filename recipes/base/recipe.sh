@@ -7,7 +7,7 @@
 
 # _base_motd_profile — 裝登入畫面腳本（兩個發行版共用同一份）
 _base_motd_profile() {
-  install -D -o root -g root -m 0644 "${MKSCTL_RECIPE_DIR}/files/etc/profile.d/motd-env.sh" \
+  install -D -o root -g root -m 0644 "${MKSCTL_RECIPE_DIR}/etc/profile.d/motd-env.sh" \
     /etc/profile.d/motd-env.sh || return 1
 }
 
