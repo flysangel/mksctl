@@ -60,7 +60,7 @@ func TestWindowsLayerFor(t *testing.T) {
 	typ, build, ok := WindowsLayerFor("windows-11")
 	assert.True(t, ok)
 	assert.Equal(t, "Client", typ)
-	assert.Equal(t, "22000", build)
+	assert.Equal(t, "26100", build)
 
 	typ, build, ok = WindowsLayerFor("windows-server-2025")
 	assert.True(t, ok)
@@ -69,4 +69,17 @@ func TestWindowsLayerFor(t *testing.T) {
 
 	_, _, ok = WindowsLayerFor("windows-95")
 	assert.False(t, ok)
+}
+
+func TestWindowsPlatformUnsupportedBuildsHaveNoExactLayer(t *testing.T) {
+	defs := testDefs(t)
+	for _, c := range []struct{ typ, build, layer string }{
+		{"Client", "22631", "windows-client-22631"},
+		{"Client", "19044", "windows-client-19044"},
+		{"Server", "20348", "windows-server-20348"},
+	} {
+		p := defs.Apply(WindowsPlatform(c.typ, c.build))
+		assert.Equal(t, c.layer, p.Layers[0])
+		assert.False(t, p.HasExactLayer, c.layer)
+	}
 }

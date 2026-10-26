@@ -9,21 +9,12 @@ type windowsBuild struct {
 	layer            string
 }
 
-// windowsBuilds 的順序有意義：WindowsLayerFor 取同一層的第一筆。
+// windowsBuilds 只列支援的 build，不在表內的一律走「沒有精確層」，由 preflight 擋下。
+// 順序有意義：WindowsLayerFor 取同一層的第一筆。
 var windowsBuilds = []windowsBuild{
-	{"Client", "19041", "windows-10"},
-	{"Client", "19042", "windows-10"},
-	{"Client", "19043", "windows-10"},
-	{"Client", "19044", "windows-10"},
 	{"Client", "19045", "windows-10"},
-	{"Client", "22000", "windows-11"},
-	{"Client", "22621", "windows-11"},
-	{"Client", "22631", "windows-11"},
 	{"Client", "26100", "windows-11"},
 	{"Client", "26200", "windows-11"},
-	{"Server", "14393", "windows-server-2016"},
-	{"Server", "17763", "windows-server-2019"},
-	{"Server", "20348", "windows-server-2022"},
 	{"Server", "26100", "windows-server-2025"},
 }
 
