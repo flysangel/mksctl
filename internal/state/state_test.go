@@ -1,8 +1,10 @@
 package state
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,4 +63,52 @@ func TestSaveWritesUTC(t *testing.T) {
 	raw, err := os.ReadFile(p)
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"installed_at": "2026-10-26T01:02:03Z"`)
+}
+
+func TestDataRoundTripAndDelete(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+	f := File{Recipes: map[string]Entry{
+		"windowsuser": {Data: []byte(`{"created":["bob"]}`)},
+		"explorer":    {},
+	}}
+	require.NoError(t, f.Save(p))
+	raw, err := os.ReadFile(p)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(raw), `"data"`), "沒有資料的紀錄不寫 data 欄")
+
+	got, err := Load(p)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"created":["bob"]}`, string(got.Recipes["windowsuser"].Data))
+
+	got.Delete("windowsuser")
+	got.Delete("沒有這個") // 不存在不算錯
+	assert.NotContains(t, got.Recipes, "windowsuser")
+	assert.Contains(t, got.Recipes, "explorer")
+}
+
+func TestRenameRetriesTransientErrors(t *testing.T) {
+	transient := errors.New("被占用")
+	n := 0
+	err := renameRetry("a", "b", func(string, string) error {
+		n++
+		if n < 3 {
+			return transient
+		}
+		return nil
+	}, func(err error) bool { return errors.Is(err, transient) }, 10, time.Millisecond)
+	require.NoError(t, err)
+	assert.Equal(t, 3, n)
+
+	n = 0
+	err = renameRetry("a", "b", func(string, string) error { n++; return transient },
+		func(err error) bool { return errors.Is(err, transient) }, 10, time.Millisecond)
+	require.ErrorIs(t, err, transient)
+	assert.Equal(t, 10, n, "最多試 10 次")
+
+	n = 0
+	other := errors.New("別的錯")
+	err = renameRetry("a", "b", func(string, string) error { n++; return other },
+		func(err error) bool { return errors.Is(err, transient) }, 10, time.Millisecond)
+	require.ErrorIs(t, err, other)
+	assert.Equal(t, 1, n, "不是暫時性的錯誤不重試")
 }
