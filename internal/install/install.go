@@ -192,7 +192,10 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 
 	// 4. 查 apt 來源衝突。這時還沒寫任何東西。
 	for _, pl := range plans {
-		if pl.action != state.Run || pl.r.AptSource == nil || !slices.Contains(p.Layers, "apt") {
+		if pl.action == state.Run && pl.r.AptSource != nil && !p.Provides["apt"] && deps.Stdout != nil {
+			fmt.Fprintf(deps.Stdout, "Info: %s 的 apt_source 在這個平台不適用，略過\n", pl.r.Name)
+		}
+		if !usesAptSource(pl, p) {
 			continue
 		}
 		cs, err := aptsource.FindConflicts(sysroot, *pl.r.AptSource, p)
@@ -370,6 +373,12 @@ func fetchAll(ctx context.Context, f *fetch.Fetcher, up *upstream.Client, st sta
 	return plans, artifacts, diffs, nil
 }
 
+// usesAptSource 回報這個計畫是否要處理 apt_source：要跑、有宣告，而且平台提供 apt。
+// 不提供 apt 的平台（例如 alpine）直接略過，不查衝突、不下載金鑰、不寫來源檔。
+func usesAptSource(pl plan, p platform.Platform) bool {
+	return pl.action == state.Run && pl.r.AptSource != nil && p.Provides["apt"]
+}
+
 func prepareSources(ctx context.Context, hc *http.Client, sysroot string, p platform.Platform,
 	defs platform.Defs, plans []plan, idx pkgindex.Index,
 ) error {
@@ -377,7 +386,7 @@ func prepareSources(ctx context.Context, hc *http.Client, sysroot string, p plat
 		hc = http.DefaultClient
 	}
 	for _, pl := range plans {
-		if pl.action != state.Run || pl.r.AptSource == nil || !slices.Contains(p.Layers, "apt") {
+		if !usesAptSource(pl, p) {
 			continue
 		}
 		if err := aptsource.Write(ctx, sysroot, *pl.r.AptSource, p, hc); err != nil {

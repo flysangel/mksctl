@@ -247,7 +247,7 @@ func fakeDeps(t *testing.T, osRelease string) *fixture {
 	fsys := fstest.MapFS{
 		"platforms/ubuntu-24.04.yaml": {Data: []byte("provides: []\n")},
 		"platforms/ubuntu.yaml":       {Data: []byte("provides: []\n")},
-		"platforms/apt.yaml":          {Data: []byte("provides: [systemd]\n")},
+		"platforms/apt.yaml":          {Data: []byte("provides: [apt, systemd]\n")},
 		"platforms/common.yaml":       {Data: []byte("provides: []\n")},
 		"platforms/alpine-3.22.yaml":  {Data: []byte("repositories: [\"https://dl-cdn.example/v3.22/community\"]\n")},
 		"platforms/apk.yaml":          {Data: []byte("provides: [gpu]\n")},
@@ -559,4 +559,17 @@ func TestInstallKeepsConfiguredTUFCache(t *testing.T) {
 	_, err := Run(ctx, fx.Deps, Options{Names: []string{"helm"}})
 	require.NoError(t, err)
 	assert.Equal(t, fx.Deps.TUFCacheDir, got)
+}
+
+func TestAlpineSkipsAptSource(t *testing.T) {
+	fx := fakeDeps(t, "ID=alpine\nVERSION_ID=3.22.1\n")
+	fx.Index.has["docker-ce"] = true
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"docker"}})
+	require.NoError(t, err)
+	assert.Empty(t, diffs)
+	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/sources.list.d"))
+	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/keyrings"))
+	assert.False(t, fx.requested("/docker.gpg"), "不該對金鑰網址發請求")
+	assert.Equal(t, []string{"docker"}, fx.Runner.calls)
+	assert.Contains(t, fx.Stdout.String(), "Info: docker 的 apt_source 在這個平台不適用，略過")
 }
