@@ -28,7 +28,7 @@ command -v lxc-create >/dev/null || {
   exit 1
 }
 
-# wait_ready <容器> — 最多 60 秒，輪詢「有預設路由且解析得了 dl-cdn.alpinelinux.org」
+# wait_ready <容器> — 含等 init 在內整體最多 60 秒，輪詢「有預設路由且解析得了 dl-cdn.alpinelinux.org」
 # 固定睡 5 秒不夠：慢的時候網路還沒好，安裝會在 apt 或 apk 那步假失敗。
 wait_ready() {
   local n="$1"
@@ -36,16 +36,15 @@ wait_ready() {
   # 單引號是刻意的：迴圈在容器裡跑，變數要留到容器裡才展開
   # shellcheck disable=SC2016
   sudo lxc-attach -n "${n}" -- sh -c '
+    deadline=$(( $(date +%s) + 60 ))
     if command -v systemctl >/dev/null; then
-      systemctl is-system-running --wait >/dev/null 2>&1 || true
+      timeout 60 systemctl is-system-running --wait >/dev/null 2>&1 || true
     fi
-    i=0
-    while [ "$i" -lt 60 ]; do
+    while [ "$(date +%s)" -lt "$deadline" ]; do
       if grep -qE "^[^[:space:]]+[[:space:]]+00000000[[:space:]]" /proc/net/route &&
         getent hosts dl-cdn.alpinelinux.org >/dev/null 2>&1; then
         exit 0
       fi
-      i=$((i + 1))
       sleep 1
     done
     exit 1
@@ -67,6 +66,7 @@ run_one() {
   read -r -a template <<<"${LXC_TEMPLATE[${layer}]}"
 
   sudo lxc-destroy -f -n "${n}" >/dev/null 2>&1 || true
+  clean_lxc "${n}"
   sudo lxc-create -q -n "${n}" -t download -- "${template[@]}" || return 1
 
   # repo 唯讀 bind mount 到容器內的 /repo（三層統一掛載點）
@@ -80,8 +80,6 @@ run_one() {
     sudo lxc-attach -n "${n}" -- sh -c "${boot} && $(install_twice_cmd "${name}")" || rc=$?
   fi
 
-  sudo lxc-stop -k -n "${n}" >/dev/null 2>&1 || true
-  sudo lxc-destroy -f -n "${n}" >/dev/null 2>&1 || true
   return "${rc}"
 }
 

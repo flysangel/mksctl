@@ -40,8 +40,8 @@ for tool in qemu-system-x86_64 qemu-img cloud-localds; do
     exit 1
   }
 done
-if [[ ! -r /dev/kvm ]]; then
-  echo "Error: 讀不到 /dev/kvm。已加入 kvm 群組的話要重新登入才生效" >&2
+if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+  echo "Error: 讀寫不了 /dev/kvm。已加入 kvm 群組的話要重新登入才生效" >&2
   echo "Info: 不想重登可改跑 sg kvm -c 'task test:recipe -- ${recipe_name}'" >&2
   exit 1
 fi
@@ -57,7 +57,7 @@ vm_script() {
   # shellcheck disable=SC2016
   tmpl='#!/bin/sh
 mkdir -p /repo /out
-mount -t virtiofs repo /repo
+mount -t virtiofs -o ro repo /repo
 mount -t virtiofs out /out
 if ! { __BOOT__; } >/out/install.log 2>&1; then
   echo 1 >/out/install.rc
@@ -65,7 +65,14 @@ if ! { __BOOT__; } >/out/install.log 2>&1; then
   poweroff -f
 fi
 rc=0
+# virtiofsd 1.10.0 沒有唯讀選項，唯讀靠上面的 -o ro；這裡驗證寫入真的被擋
+if touch /repo/.mksctl-rw-probe 2>/dev/null; then
+  rm -f /repo/.mksctl-rw-probe
+  echo "Error: /repo 不是唯讀" >>/out/install.log
+  rc=1
+fi
 for n in 1 2; do
+  [ "$rc" -eq 0 ] || break
   echo "Info: 第 $n 次 install __NAME__" >>/out/install.log
   /repo/dist/mksctl install __NAME__ >>/out/install.log 2>&1 || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -90,9 +97,13 @@ run_one() {
   out="$(mktemp -d)"
   seeddir="$(mktemp -d)"
   sockdir="$(mktemp -d)"
+  clean_path "${out}"
+  clean_path "${seeddir}"
+  clean_path "${sockdir}"
 
   base="$(vm_base "${layer}" "${VM_URL[${layer}]}")" || return 1
   ov="$(vm_overlay "${base}" "${vm_name}")" || return 1
+  clean_path "${ov}"
 
   {
     printf '#cloud-config\nwrite_files:\n  - path: /mksctl-run.sh\n    permissions: "0755"\n    content: |\n'
@@ -104,8 +115,10 @@ run_one() {
 
   "${VIRTIOFSD}" --socket-path="${sockdir}/repo" --shared-dir "${PWD}" --sandbox none >/dev/null 2>&1 &
   local vp1=$!
+  clean_pid "${vp1}"
   "${VIRTIOFSD}" --socket-path="${sockdir}/out" --shared-dir "${out}" --sandbox none >/dev/null 2>&1 &
   local vp2=$!
+  clean_pid "${vp2}"
   sleep 1
 
   # qemu -nographic 會讀 stdin，所以導向 /dev/null
@@ -121,22 +134,16 @@ run_one() {
     -chardev "socket,id=co,path=${sockdir}/out" -device vhost-user-fs-pci,chardev=co,tag=out \
     </dev/null >/dev/null 2>&1
 
-  kill "${vp1}" "${vp2}" 2>/dev/null || true
-  rm -f "${ov}"
-  rm -rf "${seeddir}" "${sockdir}"
-
   if [[ ! -f "${out}/install.rc" ]]; then
     echo "Error: VM 沒有寫出結果（開機失敗、cloud-init 沒跑，或逾時 ${VM_TIMEOUT} 秒）" >&2
     if [[ -f "${out}/install.log" ]]; then
       tail -n 20 "${out}/install.log" >&2
     fi
-    rm -rf "${out}"
     return 1
   fi
 
   rc="$(cat "${out}/install.rc")"
   cat "${out}/install.log"
-  rm -rf "${out}"
   return "${rc}"
 }
 

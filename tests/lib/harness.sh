@@ -10,7 +10,7 @@
 #   第二次是為了證明重跑可行。回 3 是安裝前檢查有差異（stderr 有表），其他非 0 是壞掉；兩者都算 [FAIL]。
 #   平台不支援的配方（mksctl list --platform 不含它）印 [SKIP]，不影響結束碼。
 
-# SC2034：三張平台表（PODMAN_IMAGE 等）由 source 本檔的各層腳本讀取，shellcheck 看不到
+# SC2034：PODMAN_IMAGE、LXC_TEMPLATE、VM_URL 由 source 本檔的各層腳本讀取，shellcheck 看不到
 # shellcheck disable=SC2034
 MKSCTL_BIN_PATH="dist/mksctl"
 PLATFORMS_CONF="tests/platforms.conf"
@@ -21,6 +21,45 @@ PLATFORM_LAYERS=()
 declare -A PODMAN_IMAGE=()
 declare -A LXC_TEMPLATE=()
 declare -A VM_URL=()
+
+# 給 trap 用，也是各層 run_one 登記待清資源的回傳通道：暫存路徑、背景行程 pid、lxc 容器名
+CLEAN_PATHS=()
+CLEAN_PIDS=()
+CLEAN_LXC=()
+
+# clean_path <路徑> — 登記結束時要 rm -rf 的路徑
+clean_path() {
+  CLEAN_PATHS+=("$1")
+}
+
+# clean_pid <pid> — 登記結束時要 kill 的背景行程
+clean_pid() {
+  CLEAN_PIDS+=("$1")
+}
+
+# clean_lxc <容器名> — 登記結束時要 stop 與 destroy 的容器
+clean_lxc() {
+  CLEAN_LXC+=("$1")
+}
+
+# cleanup — 清掉所有登記的資源，可重複呼叫；每個平台跑完與 EXIT、INT、TERM 都會呼叫
+cleanup() {
+  local item
+
+  for item in ${CLEAN_PIDS[@]+"${CLEAN_PIDS[@]}"}; do
+    kill "${item}" 2>/dev/null || true
+  done
+  for item in ${CLEAN_LXC[@]+"${CLEAN_LXC[@]}"}; do
+    sudo lxc-stop -k -n "${item}" >/dev/null 2>&1 || true
+    sudo lxc-destroy -f -n "${item}" >/dev/null 2>&1 || true
+  done
+  for item in ${CLEAN_PATHS[@]+"${CLEAN_PATHS[@]}"}; do
+    rm -rf -- "${item}" 2>/dev/null || sudo -n rm -rf -- "${item}" 2>/dev/null || true
+  done
+  CLEAN_PIDS=()
+  CLEAN_LXC=()
+  CLEAN_PATHS=()
+}
 
 # trim <字串> — 去掉前後空白
 trim() {
@@ -94,18 +133,28 @@ recipe_venue() {
   printf '%s\n' "${venue}"
 }
 
-# supports_platform <配方> <平台層> — 該平台的配方清單含它就 return 0
+# supports_platform <配方> <平台層> — 清單含它 return 0，不含 return 1，list 本身失敗 return 2
 supports_platform() {
   local name="$1" layer="$2" listing
 
-  listing="$("${MKSCTL_BIN_PATH}" list --platform "${layer}")" || return 1
-  grep -qx -- "${name}" <<<"${listing}"
+  listing="$("${MKSCTL_BIN_PATH}" list --platform "${layer}")" || return 2
+  if grep -qx -- "${name}" <<<"${listing}"; then
+    return 0
+  fi
+  return 1
 }
 
 # record_verified <配方> <平台層> <venue> — 更新 tests/verified.conf 對應的一行
 record_verified() {
   local name="$1" layer="$2" venue="$3"
-  local hash today tmp
+  local hash today tmp dirty
+
+  # 雜湊讀 git index：工作樹有未提交的改動時，紀錄對不上實際測過的內容
+  dirty="$(git status --porcelain -- . ':!tests/verified.conf')" || return 1
+  if [[ -n "${dirty}" ]]; then
+    echo "[SKIP] 工作樹有未提交的改動，不寫 verified.conf"
+    return 0
+  fi
 
   hash="$(bash bin/verified-hash.sh "${name}")" || return 1
   today="$(date -u +%F)"
@@ -115,7 +164,7 @@ record_verified() {
     {
       awk -v k="${name} ${layer} ${venue}" '!/^#/ && NF && ($1 " " $2 " " $3) != k' "${VERIFIED_CONF}"
       printf '%s %s %s %s %s\n' "${name}" "${layer}" "${venue}" "${hash}" "${today}"
-    } | sort
+    } | LC_ALL=C sort
   } >"${tmp}"
   cat "${tmp}" >"${VERIFIED_CONF}"
   rm -f "${tmp}"
@@ -126,7 +175,7 @@ run_recipe() {
   local venue="$1" name="$2"
   local actual pass=0 skip=0 fail=0
   local fails=()
-  local layer rc log
+  local layer rc sup logdir log catpid
 
   load_platforms || return 1
   actual="$(recipe_venue "${name}")" || {
@@ -138,19 +187,37 @@ run_recipe() {
     return 1
   fi
 
+  trap cleanup EXIT
+  trap 'cleanup; exit 130' INT
+  trap 'cleanup; exit 143' TERM
+
   for layer in "${PLATFORM_LAYERS[@]}"; do
-    if ! supports_platform "${name}" "${layer}"; then
+    sup=0
+    supports_platform "${name}" "${layer}" || sup=$?
+    if ((sup == 1)); then
       echo "[SKIP] ${name} ${layer}（平台不支援）"
       skip=$((skip + 1))
+      continue
+    elif ((sup != 0)); then
+      echo "[FAIL] ${name} ${layer}（mksctl list --platform ${layer} 執行失敗）" >&2
+      fails+=("${name}@${layer}")
+      fail=$((fail + 1))
       continue
     fi
 
     echo "[....] ${name} ${layer}"
-    log="$(mktemp)"
-    # 輸出走管線交給 cat 寫 log：測試機（尤其 lxc）拿到的是管線，不是 log 檔本身，
-    # log 檔就不會變成 root 所有。PIPESTATUS 取 run_one 的結束碼。
-    run_one "${layer}" "${name}" 2>&1 </dev/null | cat >"${log}"
-    rc="${PIPESTATUS[0]}"
+    logdir="$(mktemp -d)"
+    clean_path "${logdir}"
+    log="${logdir}/run.log"
+    # 輸出走具名管線交給 cat 寫 log：測試機（尤其 lxc）拿到的是管線，不是 log 檔本身，
+    # log 檔就不會變成 root 所有。用具名管線而非 | cat，是為了讓 run_one 留在本行程，
+    # 它登記的待清資源 trap 才看得到。
+    mkfifo "${logdir}/fifo"
+    cat <"${logdir}/fifo" >"${log}" &
+    catpid=$!
+    rc=0
+    run_one "${layer}" "${name}" >"${logdir}/fifo" 2>&1 </dev/null || rc=$?
+    wait "${catpid}" || true
 
     if ((rc == 0)); then
       echo "[OK]   ${name} ${layer}"
@@ -159,18 +226,27 @@ run_recipe() {
       lxc | vm) record_verified "${name}" "${layer}" "${venue}" || echo "Error: 更新 ${VERIFIED_CONF} 失敗" >&2 ;;
       esac
     else
-      echo "[FAIL] ${name} ${layer}（結束碼 ${rc}）" >&2
-      tail -n 20 "${log}" | sed 's/^/    /' >&2
+      if ((rc == 3)); then
+        echo "[FAIL] ${name} ${layer}（安裝前檢查有差異，結束碼 3）" >&2
+        sed 's/^/    /' "${log}" >&2
+      else
+        echo "[FAIL] ${name} ${layer}（結束碼 ${rc}）" >&2
+        tail -n 40 "${log}" | sed 's/^/    /' >&2
+      fi
       fails+=("${name}@${layer}")
       fail=$((fail + 1))
     fi
-    rm -f "${log}"
+    cleanup
   done
 
   echo "---------------------------------------"
   echo "[OK] ${pass}  [SKIP] ${skip}  [FAIL] ${fail}"
   if ((fail > 0)); then
     printf '失敗清單：%s\n' "${fails[*]}" >&2
+    return 1
+  fi
+  if ((pass == 0)); then
+    echo "[FAIL] 沒有任何一項實際執行" >&2
     return 1
   fi
   return 0
