@@ -18,18 +18,4 @@ jobs:
       - name: 實測 podman 層的全部配方
         env:
           MKSCTL_TEST_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          task build
-          failed=()
-          while read -r name venue _; do
-            if [[ "${venue}" != podman ]]; then
-              continue
-            fi
-            echo "::group::${name}"
-            task test:recipe -- "${name}" || failed+=("${name}")
-            echo "::endgroup::"
-          done < <(./dist/mksctl list --all)
-          if ((${#failed[@]} > 0)); then
-            echo "Error: podman 層失敗的配方：${failed[*]}" >&2
-            exit 1
-          fi
+        run: bash bin/smoke-venue.sh podman
