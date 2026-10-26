@@ -53,9 +53,21 @@ func RenderMirror(m platform.AptMirror, p platform.Platform) ([]byte, error) {
 // /etc/apt/sources.list 還有一行式的 deb 行時（舊 provision 或舊版 ubuntu 的寫法），
 // 備份後清空：同一個套件庫在兩處出現，apt 會報重複，Signed-By 不同時更會拒讀全部來源。
 func WriteMirror(sysroot string, m platform.AptMirror, p platform.Platform) (changed bool, err error) {
+	c, err := WriteMirrorDetail(sysroot, m, p)
+	return c.Mirror || c.LegacyCleared, err
+}
+
+// MirrorChanges 分開記兩種改動，呼叫端才能只對真的發生的事印訊息。
+type MirrorChanges struct {
+	Mirror        bool // ubuntu.sources 改寫了
+	LegacyCleared bool // /etc/apt/sources.list 備份後清空了
+}
+
+// WriteMirrorDetail 做的事與 WriteMirror 相同，回傳值分開記兩種改動。
+func WriteMirrorDetail(sysroot string, m platform.AptMirror, p platform.Platform) (c MirrorChanges, err error) {
 	content, err := RenderMirror(m, p)
 	if err != nil {
-		return false, err
+		return c, err
 	}
 	target := filepath.Join(sysroot, sourcesDir, mirrorFile)
 	cur, err := os.ReadFile(target)
@@ -63,36 +75,37 @@ func WriteMirror(sysroot string, m platform.AptMirror, p platform.Platform) (cha
 	case err == nil && bytes.Equal(cur, content):
 	case err == nil:
 		if err := backupOnce(target, cur); err != nil {
-			return false, err
+			return c, err
 		}
 		fallthrough
 	case os.IsNotExist(err):
 		if err := writeAtomic(target, content); err != nil {
-			return false, err
+			return c, err
 		}
-		changed = true
+		c.Mirror = true
 	default:
-		return false, err
+		return c, err
 	}
 
 	legacy := filepath.Join(sysroot, legacyList)
 	old, err := os.ReadFile(legacy)
 	if os.IsNotExist(err) {
-		return changed, nil
+		return c, nil
 	}
 	if err != nil {
-		return false, err
+		return c, err
 	}
 	if len(parseList(string(old))) == 0 {
-		return changed, nil
+		return c, nil
 	}
 	if err := backupOnce(legacy, old); err != nil {
-		return false, err
+		return c, err
 	}
 	if err := writeAtomic(legacy, []byte(legacyNote)); err != nil {
-		return false, err
+		return c, err
 	}
-	return true, nil
+	c.LegacyCleared = true
+	return c, nil
 }
 
 // backupOnce 把 data 存成 path.bk；.bk 已存在就不動它。

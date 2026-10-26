@@ -95,7 +95,7 @@ bash 執行 <名稱>_install、<名稱>_verify
 - runtime 能力 `init` 和 `kernel` 由執行環境決定，不由平台檔宣告。init 在跑時，服務啟用並啟動；沒有 init（Docker build）時只啟用。
 - `pkgmap.yaml` 用 `null` 表示該平台沒有這個套件。
 - 層檔可宣告 `apt_mirror`（發行版套件庫的鏡像，`suites` 可用 `{{.Codename}}`）與 `apt_conf`（`/etc/apt/apt.conf.d/` 的檔名對內容）。多層都有時取最具體的一層，不合併。目前只有 `ubuntu` 層有，值看 `platforms/ubuntu.yaml`。
-- 鏡像整檔取代 `/etc/apt/sources.list.d/ubuntu.sources`。第一次寫入前把原檔備份成 `ubuntu.sources.bk`，已有備份就不再備份。`/etc/apt/sources.list` 還有 `deb` 行時，備份成 `sources.list.bk` 後清空。
+- 鏡像整檔取代 `/etc/apt/sources.list.d/ubuntu.sources`。第一次寫入前把原檔備份成 `ubuntu.sources.bk`，已有 `.bk` 時不再備份。mksctl 寫過之後，使用者自己改的 `ubuntu.sources` 會在下次寫入時被取代。`/etc/apt/sources.list` 還有 `deb` 行時，備份成 `sources.list.bk` 後清空。
 
 ### 雜湊來源順序
 

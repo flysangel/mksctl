@@ -243,6 +243,25 @@ apt_sources:
 `,
 }
 
+// putCloudSources 在 sysroot 放一份雲端映像預設的 ubuntu.sources。
+func putCloudSources(t *testing.T, fx *fixture) string {
+	t.Helper()
+	src := filepath.Join(fx.Sysroot, "etc/apt/sources.list.d/ubuntu.sources")
+	require.NoError(t, os.MkdirAll(filepath.Dir(src), 0o755))
+	require.NoError(t, os.WriteFile(src, []byte(cloudSources), 0o644))
+	return src
+}
+
+// assertMirrorUntouched 證明鏡像與 apt_conf 都沒寫：第 4 步停下時第 5 步不能有任何動作。
+func assertMirrorUntouched(t *testing.T, fx *fixture, src string) {
+	t.Helper()
+	b, err := os.ReadFile(src)
+	require.NoError(t, err)
+	assert.Equal(t, cloudSources, string(b))
+	assert.NoFileExists(t, src+".bk")
+	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/apt.conf.d"))
+}
+
 // testUbuntuLayer 是假的 ubuntu 平台層：鏡像與 apt 設定。
 const testUbuntuLayer = `provides: []
 apt_mirror:
@@ -396,8 +415,8 @@ func TestDockerCePassesAfterSourceWritten(t *testing.T) {
 
 func TestAptConflictStopsBeforeWrite(t *testing.T) {
 	fx := fakeDeps(t, ubuntu2404)
+	src := putCloudSources(t, fx)
 	dir := filepath.Join(fx.Sysroot, "etc/apt/sources.list.d")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
 	uri := strings.TrimSuffix(fx.Deps.GitHubBase, "/") + "/docker"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "old-docker.list"),
 		[]byte("deb [signed-by=/etc/apt/keyrings/old.gpg] "+uri+" noble stable\n"), 0o644))
@@ -408,6 +427,7 @@ func TestAptConflictStopsBeforeWrite(t *testing.T) {
 	assert.Contains(t, diffs[0].Detail, "Fix: rm /etc/apt/sources.list.d/old-docker.list")
 	assert.NoFileExists(t, filepath.Join(dir, "docker.sources"))
 	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/keyrings"))
+	assertMirrorUntouched(t, fx, src)
 	assert.Zero(t, fx.Index.RefreshCalls())
 }
 
@@ -663,8 +683,8 @@ func TestInstallWritesEveryAptSource(t *testing.T) {
 // 衝突要逐筆查：第二筆來源撞到舊 .list 時也要停下，而且第一筆也不能先寫。
 func TestInstallChecksEveryAptSourceForConflicts(t *testing.T) {
 	fx := fakeDeps(t, ubuntu2404)
+	src := putCloudSources(t, fx)
 	dir := filepath.Join(fx.Sysroot, "etc/apt/sources.list.d")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
 	uri := strings.TrimSuffix(fx.Deps.GitHubBase, "/") + "/multi2"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "old-multi2.list"),
 		[]byte("deb [signed-by=/usr/share/keyrings/old.gpg] "+uri+" noble main\n"), 0o644))
@@ -673,6 +693,7 @@ func TestInstallChecksEveryAptSourceForConflicts(t *testing.T) {
 	require.Equal(t, []string{"multiapt/apt-source-conflict"}, kinds(diffs))
 	assert.NoFileExists(t, filepath.Join(dir, "multi1.sources"))
 	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/keyrings"))
+	assertMirrorUntouched(t, fx, src)
 }
 
 // 金鑰網址壞了是下載失敗：在第 3 步就停，機器上什麼都沒寫，也沒更新索引。
@@ -743,6 +764,8 @@ func TestAptConfWritten(t *testing.T) {
 	bk, err := os.ReadFile(src + ".bk")
 	require.NoError(t, err)
 	assert.Equal(t, cloudSources, string(bk))
+	assert.Contains(t, fx.Stdout.String(), "Info: apt 鏡像改為 http://mirror.example/ubuntu/")
+	assert.NotContains(t, fx.Stdout.String(), "sources.list.bk", "沒有清 legacy sources.list 就不該提它")
 	assert.Equal(t, 1, fx.Index.RefreshCalls())
 	assert.Equal(t, []string{"base"}, fx.Runner.calls)
 }
@@ -765,4 +788,17 @@ func TestAptKeyFetchedOnce(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(fx.Sysroot, "etc/apt/keyrings/docker.asc"))
 	require.NoError(t, err)
 	assert.Equal(t, "KEY", string(b))
+}
+
+// legacy sources.list 有 deb 行時，清空它的訊息另外印一句。
+func TestLegacyClearMessage(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	putCloudSources(t, fx)
+	legacy := filepath.Join(fx.Sysroot, "etc/apt/sources.list")
+	require.NoError(t, os.WriteFile(legacy, []byte("deb http://old.example/ubuntu noble main\n"), 0o644))
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"base"}})
+	require.NoError(t, err)
+	require.Empty(t, diffs)
+	assert.Contains(t, fx.Stdout.String(), "Info: 已清空 /etc/apt/sources.list 的來源，原內容備份在 /etc/apt/sources.list.bk")
+	assert.FileExists(t, legacy+".bk")
 }

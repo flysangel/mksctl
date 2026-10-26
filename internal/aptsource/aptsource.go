@@ -228,10 +228,10 @@ func FindConflicts(sysroot string, s recipe.AptSource, p platform.Platform) ([]C
 
 	// 第一輪：找出每個檔的衝突 URI 與其他（不衝突的）URI。
 	type hit struct {
-		pf        parsed
-		conflict  []string
-		others    []string
-		keyrings  []string // 衝突行的 signed-by，已去重
+		pf       parsed
+		conflict []string
+		others   []string
+		keyrings []string // 衝突行的 signed-by，已去重
 	}
 	var hits []*hit
 	removed := map[string]bool{}

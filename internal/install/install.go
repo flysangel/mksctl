@@ -429,12 +429,15 @@ func prepareSources(ctx context.Context, out io.Writer, sysroot string, p platfo
 	// 順序：鏡像 → apt 設定 → 第三方來源。鏡像在前，第三方套件的相依才從同一個發行版來源解析。
 	if p.Provides["apt"] {
 		if m := defs.AptMirror(p); m != nil {
-			changed, err := aptsource.WriteMirror(sysroot, *m, p)
+			c, err := aptsource.WriteMirrorDetail(sysroot, *m, p)
 			if err != nil {
 				return fmt.Errorf("寫 apt 鏡像：%w", err)
 			}
-			if changed {
-				fmt.Fprintf(out, "Info: apt 鏡像改為 %s（原來源備份成 .bk）\n", m.URIs)
+			if c.Mirror {
+				fmt.Fprintf(out, "Info: apt 鏡像改為 %s，寫在 /etc/apt/sources.list.d/ubuntu.sources\n", m.URIs)
+			}
+			if c.LegacyCleared {
+				fmt.Fprintln(out, "Info: 已清空 /etc/apt/sources.list 的來源，原內容備份在 /etc/apt/sources.list.bk")
 			}
 		}
 		if conf := defs.AptConf(p); len(conf) > 0 {
