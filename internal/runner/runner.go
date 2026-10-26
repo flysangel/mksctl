@@ -24,6 +24,9 @@ type Runner struct {
 	Bin    string
 	Stdout io.Writer
 	Stderr io.Writer
+
+	// scriptHook 只給測試：收到組好的腳本全文，用來斷言機密沒進腳本。
+	scriptHook func(script string)
 }
 
 var envKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -35,7 +38,8 @@ func quote(s string) string {
 }
 
 // Run 依序 source 各層與配方，再呼叫 <名稱>_install、<名稱>_verify。
-// env 疊在內建變數之上，同名時以 env 為準。
+// env（含 --set 的參數與機密）只放進子行程環境變數，不寫進暫存腳本，
+// 也不進 argv，避免機密落在磁碟或 ps 看得到的地方。
 func (r *Runner) Run(ctx context.Context, p platform.Platform, rc recipe.Recipe, env map[string]string) error {
 	recipeDir, err := os.MkdirTemp("", "mksctl-recipe-*")
 	if err != nil {
@@ -58,13 +62,19 @@ func (r *Runner) Run(ctx context.Context, p platform.Platform, rc recipe.Recipe,
 		"MKSCTL_RECIPE_DIR":   recipeDir,
 		"MKSCTL_INIT_RUNNING": initRunning,
 	}
-	for k, v := range env {
-		vars[k] = v
+	for k := range env {
+		if !envKey.MatchString(k) {
+			return fmt.Errorf("環境變數名稱不合法：%q", k)
+		}
 	}
 
 	script, err := r.compose(p, rc.Name, vars)
 	if err != nil {
 		return err
+	}
+
+	if r.scriptHook != nil {
+		r.scriptHook(script)
 	}
 
 	f, err := os.CreateTemp("", "mksctl-run-*.sh")
@@ -83,7 +93,7 @@ func (r *Runner) Run(ctx context.Context, p platform.Platform, rc recipe.Recipe,
 	cmd := exec.CommandContext(ctx, "bash", f.Name())
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
-	cmd.Env = os.Environ()
+	cmd.Env = mergeEnv(os.Environ(), env)
 	// 行程組與取消時的殺法隨平台不同，細節與理由見 proc_unix.go。
 	configureProc(cmd)
 	cmd.Cancel = func() error { return killProc(cmd) }
@@ -92,6 +102,27 @@ func (r *Runner) Run(ctx context.Context, p platform.Platform, rc recipe.Recipe,
 		return fmt.Errorf("配方 %s 執行失敗：%w", rc.Name, err)
 	}
 	return nil
+}
+
+// mergeEnv 把 extra 接在 base 之後，並先濾掉 base 中同名的項目，
+// 不靠「後者覆蓋前者」的實作細節。
+func mergeEnv(base []string, extra map[string]string) []string {
+	out := make([]string, 0, len(base)+len(extra))
+	for _, kv := range base {
+		k, _, _ := strings.Cut(kv, "=")
+		if _, dup := extra[k]; !dup {
+			out = append(out, kv)
+		}
+	}
+	keys := make([]string, 0, len(extra))
+	for k := range extra {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		out = append(out, k+"="+extra[k])
+	}
+	return out
 }
 
 func (r *Runner) compose(p platform.Platform, name string, vars map[string]string) (string, error) {

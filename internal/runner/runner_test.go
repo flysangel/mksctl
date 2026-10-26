@@ -128,9 +128,11 @@ func TestCommonSvcEnable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "enable foo\n", out)
 
-	out, _, err = run(t, fsys, layers, "demo", map[string]string{"MKSCTL_INIT_RUNNING": "1"})
-	require.NoError(t, err)
-	assert.Equal(t, "enable foo\nstart foo\n", out)
+	// init 是否在跑由平台決定（內建變數），不再靠 env 覆蓋。
+	var buf bytes.Buffer
+	r := &Runner{FS: fsys, Bin: "/bin/false", Stdout: &buf, Stderr: io.Discard}
+	require.NoError(t, r.Run(context.Background(), platform.Platform{Layers: layers, InitRunning: true}, recipe.Recipe{Name: "demo"}, nil))
+	assert.Equal(t, "enable foo\nstart foo\n", buf.String())
 }
 
 func TestCommonFetchCallsBin(t *testing.T) {
@@ -187,4 +189,39 @@ func TestInstallBinFailsUnderOrContext(t *testing.T) {
 			assert.NotContains(t, out, "AFTER")
 		})
 	}
+}
+
+func TestRunParamNotInScript(t *testing.T) {
+	secret := "p@ss'w\"o$rd`x\nline2"
+	var script string
+	fsys := demoFS(t, "demo_install() { :; }\ndemo_verify() { :; }\n")
+	r := &Runner{FS: fsys, Bin: "/bin/false", Stdout: io.Discard, Stderr: io.Discard, scriptHook: func(s string) { script = s }}
+	err := r.Run(context.Background(), platform.Platform{Layers: []string{"common"}}, recipe.Recipe{Name: "demo"},
+		map[string]string{"MKSCTL_PARAM_PW": secret})
+	require.NoError(t, err)
+	require.NotEmpty(t, script)
+	assert.NotContains(t, script, "p@ss")
+	assert.NotContains(t, script, "MKSCTL_PARAM_PW")
+}
+
+func TestRunParamReachesRecipe(t *testing.T) {
+	secret := "p@ss'w\"o$rd`x\nline2"
+	fsys := demoFS(t, "demo_install() { printf '%s' \"$MKSCTL_PARAM_PW\"; }\ndemo_verify() { :; }\n")
+	out, _, err := run(t, fsys, []string{"common"}, "demo", map[string]string{"MKSCTL_PARAM_PW": secret})
+	require.NoError(t, err)
+	assert.Equal(t, secret, out)
+}
+
+func TestRunEnvOverridesInheritedEnv(t *testing.T) {
+	t.Setenv("MKSCTL_PARAM_DUP", "old")
+	fsys := demoFS(t, "demo_install() { printf '%s' \"$MKSCTL_PARAM_DUP\"; }\ndemo_verify() { :; }\n")
+	out, _, err := run(t, fsys, []string{"common"}, "demo", map[string]string{"MKSCTL_PARAM_DUP": "new"})
+	require.NoError(t, err)
+	assert.Equal(t, "new", out)
+}
+
+func TestRunRejectsBadEnvKey(t *testing.T) {
+	fsys := demoFS(t, "demo_install() { :; }\ndemo_verify() { :; }\n")
+	_, _, err := run(t, fsys, []string{"common"}, "demo", map[string]string{"BAD-KEY": "x"})
+	require.Error(t, err)
 }
