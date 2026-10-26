@@ -34,6 +34,8 @@ var (
 	ErrUnverified = errors.New("fetch: 下載檔未通過驗證")
 	// ErrTrustMismatch：下載檔與 trust/hashes.yaml 的記錄不符。
 	ErrTrustMismatch = errors.New("fetch: 與 trust 記錄不符")
+	// ErrTrustMissing：配方要求 trust，但 trust/hashes.yaml 沒有這個網址的記錄，也沒有後面的來源可用。
+	ErrTrustMissing = errors.New("fetch: trust 沒有這個網址的記錄")
 	// ErrChecksumMismatch：下載檔與上游公布的雜湊不符。
 	ErrChecksumMismatch = errors.New("fetch: 雜湊不符")
 )
@@ -112,15 +114,10 @@ func render(name, text string, d tmplData) (string, error) {
 // 第一個「有設定且適用」的來源決定成敗，不再往下試：作者寫了來源卻驗不過，代表檔案有問題，
 // 退到較弱的來源等於把強的驗證關掉。失敗時刪掉下載檔，不留未驗證的檔給後續步驟誤用。
 func (f *Fetcher) Get(ctx context.Context, a recipe.Artifact, version string) (Result, error) {
-	d := tmplData{Version: version, Arch: f.Arch}
-	if d.Arch == "" {
-		d.Arch = "amd64"
-	}
-	u, err := render("url", a.URL, d)
+	d, u, err := f.renderURL(a, version)
 	if err != nil {
 		return Result{}, err
 	}
-	d.URL = u
 	pu, err := url.Parse(u)
 	if err != nil {
 		return Result{}, fmt.Errorf("fetch: 網址 %s：%w", u, err)
@@ -138,9 +135,13 @@ func (f *Fetcher) Get(ctx context.Context, a recipe.Artifact, version string) (R
 		if err := f.verify(ctx, a.Checksum, d, name, sum, size); err != nil {
 			_ = os.Remove(tmp)
 			err = fmt.Errorf("%s（%s）：%w", a.ID, u, err)
-			if errors.Is(err, ErrTrustMismatch) {
+			switch {
+			case errors.Is(err, ErrTrustMismatch):
 				// 上游換檔是最常見的原因，直接給出修法，使用者不必翻文件。
 				err = fmt.Errorf("%w\n上游的檔已更新，執行 task trust:refresh -- %s 重新驗證", err, f.recipeHint())
+			case errors.Is(err, ErrTrustMissing):
+				// 網址變了（例如版本升級）或還沒記錄過，修法同上。
+				err = fmt.Errorf("%w\n上游的檔已更新或尚未記錄，執行 task trust:refresh -- %s 重新驗證", err, f.recipeHint())
 			}
 			return Result{}, err
 		}
@@ -151,6 +152,20 @@ func (f *Fetcher) Get(ctx context.Context, a recipe.Artifact, version string) (R
 		return Result{}, fmt.Errorf("fetch: 移到 %s：%w", dst, err)
 	}
 	return Result{ID: a.ID, Path: dst, Version: version, SHA256: hex.EncodeToString(sum)}, nil
+}
+
+// renderURL 組出樣板資料（Arch 預設 amd64）並算出 a 的下載網址。Get 與 Record 共用。
+func (f *Fetcher) renderURL(a recipe.Artifact, version string) (tmplData, string, error) {
+	d := tmplData{Version: version, Arch: f.Arch}
+	if d.Arch == "" {
+		d.Arch = "amd64"
+	}
+	u, err := render("url", a.URL, d)
+	if err != nil {
+		return d, "", err
+	}
+	d.URL = u
+	return d, u, nil
 }
 
 func (f *Fetcher) recipeHint() string {
@@ -164,11 +179,7 @@ func (f *Fetcher) recipeHint() string {
 // 給 trust:refresh 用：那時使用者正是要重新決定「現在上游的檔可信」，所以沒有可比對的對象。
 // 下載檔只暫存在 Dir 的 .part 檔，算完就刪，不留下未驗證的檔。
 func (f *Fetcher) Record(ctx context.Context, a recipe.Artifact, version string) (TrustEntry, error) {
-	d := tmplData{Version: version, Arch: f.Arch}
-	if d.Arch == "" {
-		d.Arch = "amd64"
-	}
-	u, err := render("url", a.URL, d)
+	_, u, err := f.renderURL(a, version)
 	if err != nil {
 		return TrustEntry{}, err
 	}
@@ -220,6 +231,7 @@ func (f *Fetcher) verify(ctx context.Context, c recipe.ChecksumSpec, d tmplData,
 		}
 		return compare(want, got, ErrChecksumMismatch)
 	}
+	trustMissing := false
 	if c.Trust {
 		if e, ok := f.Trust.lookup(d.URL); ok {
 			if e.Size != 0 && e.Size != size {
@@ -227,6 +239,7 @@ func (f *Fetcher) verify(ctx context.Context, c recipe.ChecksumSpec, d tmplData,
 			}
 			return compare(e.SHA256, got, ErrTrustMismatch)
 		}
+		trustMissing = true
 	}
 	if c.GitHubDigest {
 		if owner, repo, tag, ok := f.githubRelease(d.URL); ok {
@@ -236,6 +249,9 @@ func (f *Fetcher) verify(ctx context.Context, c recipe.ChecksumSpec, d tmplData,
 			}
 			return compare(want, got, ErrChecksumMismatch)
 		}
+	}
+	if trustMissing {
+		return fmt.Errorf("%w：沒有可用的雜湊來源（%w）", ErrUnverified, ErrTrustMissing)
 	}
 	return fmt.Errorf("%w：沒有可用的雜湊來源", ErrUnverified)
 }

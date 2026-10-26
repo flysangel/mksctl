@@ -491,3 +491,17 @@ func TestChecksumMismatchHasNoRefreshHint(t *testing.T) {
 	require.ErrorIs(t, err, ErrChecksumMismatch)
 	assert.NotContains(t, err.Error(), "trust:refresh")
 }
+
+// 網址變了（例如版本升級）而 trust 還記著舊網址時，錯誤要帶修法。
+func TestTrustMissingMessageMentionsRefresh(t *testing.T) {
+	srv := fileServer(t, map[string][]byte{"/tool-v2": payload}, nil)
+	f := newFetcher(t, srv)
+	f.Recipe = "gitkraken"
+	f.Trust = TrustDB{"tool": {URL: srv.URL + "/tool-v1", Size: int64(len(payload)), SHA256: hexSum(payload)}}
+	a := recipe.Artifact{ID: "tool", URL: srv.URL + "/tool-v2", Checksum: recipe.ChecksumSpec{Trust: true}}
+	_, err := f.Get(context.Background(), a, "v2")
+	require.ErrorIs(t, err, ErrUnverified)
+	require.ErrorIs(t, err, ErrTrustMissing)
+	assert.Contains(t, err.Error(), "上游的檔已更新或尚未記錄，執行 task trust:refresh -- gitkraken 重新驗證")
+	dirEmpty(t, f.Dir)
+}

@@ -17,6 +17,16 @@ cleanup() {
   fi
 }
 
+fail=0
+
+# 兩個情境共用的起始檔：有別的配方的紀錄與檔頭註解，驗合併時保留
+original="# 檔頭註解
+other/keep:
+    url: http://example.invalid/keep
+    size: 1
+    sha256: $(printf 'a%.0s' $(seq 64))
+"
+
 ok() { echo "[OK] $1"; }
 
 bad() {
@@ -24,9 +34,13 @@ bad() {
   fail=1
 }
 
+# 依賴 main 之後才設定的 fake、bin、W，呼叫時都已就緒
+run_refresh() {
+  (cd "${fake}" && MKSCTL_BIN="${bin}" MKSCTL_TRUST_CATALOG="${W}/catalog" MKSCTL_TRUST_TEST_CMD="$1" bash bin/trust-refresh.sh fake 2>&1)
+}
+
 # main
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-fail=0
 
 command -v python3 >/dev/null || {
   echo "[FAIL] 需要 python3 提供 HTTP 伺服器" >&2
@@ -78,22 +92,10 @@ else
   bad "trust-record 輸出不符：${out}"
 fi
 
-# 兩個情境共用的起始檔：有別的配方的紀錄與檔頭註解，驗合併時保留
-original="# 檔頭註解
-other/keep:
-    url: http://example.invalid/keep
-    size: 1
-    sha256: $(printf 'a%.0s' $(seq 64))
-"
-
-run_refresh() {
-  (cd "${fake}" && MKSCTL_BIN="${bin}" MKSCTL_TRUST_CATALOG="${W}/catalog" MKSCTL_TRUST_TEST_CMD="$1" bash bin/trust-refresh.sh fake 2>&1)
-}
-
 # 案例二：實測成功時 trust/hashes.yaml 更新，其餘紀錄與檔頭保留
 printf '%s' "${original}" >"${fake}/trust/hashes.yaml"
-out="$(run_refresh 'true')"
-rc=$?
+rc=0
+out="$(run_refresh 'true')" || rc=$?
 got="$(cat "${fake}/trust/hashes.yaml")"
 if ((rc == 0)) && [[ "${out}" == *"Success:"* ]] &&
   [[ "${got}" == "# 檔頭註解"* && "${got}" == *"sha256: ${expect_sha}"* && "${got}" == *"other/keep:"* ]]; then
@@ -104,8 +106,8 @@ fi
 
 # 案例三：實測失敗時 trust/hashes.yaml 位元組不變且 exit 1
 printf '%s' "${original}" >"${fake}/trust/hashes.yaml"
-out="$(run_refresh 'exit 7')"
-rc=$?
+rc=0
+out="$(run_refresh 'exit 7')" || rc=$?
 if ((rc != 0)) && cmp -s "${fake}/trust/hashes.yaml" <(printf '%s' "${original}"); then
   ok "實測失敗時 trust/hashes.yaml 還原且 exit 1"
 else

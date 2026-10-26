@@ -647,44 +647,5 @@ func cmdTrustRecord(ctx context.Context, e env, args []string, stdout io.Writer)
 		_, err = stdout.Write(b)
 		return err
 	}
-	return mergeTrustFile(trustHashesPath, rec)
-}
-
-// mergeTrustFile 把 rec 併進 path：同鍵取代，其餘保留。yaml.v3 輸出時鍵按字母排序，所以順序固定；
-// 檔頭連續的註解與空行原樣保留。寫入先寫同目錄暫存檔再 rename，中途失敗不會留下半個檔。
-func mergeTrustFile(path string, rec fetch.TrustDB) error {
-	old, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("讀 %s（要在 repo 根執行）：%w", path, err)
-	}
-	db, err := fetch.LoadTrust(old)
-	if err != nil {
-		return err
-	}
-	if db == nil {
-		db = fetch.TrustDB{}
-	}
-	for k, v := range rec {
-		db[k] = v
-	}
-	var header strings.Builder
-	for _, line := range strings.SplitAfter(string(old), "\n") {
-		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
-			break
-		}
-		header.WriteString(line)
-	}
-	body, err := yaml.Marshal(db)
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append([]byte(header.String()), body...), 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return fetch.MergeInto(trustHashesPath, rec)
 }
