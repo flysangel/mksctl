@@ -1,0 +1,4 @@
+venue: vm
+requires:
+  - apt
+  - kernel

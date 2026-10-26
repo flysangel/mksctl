@@ -1,4 +1,6 @@
 venue: podman
+needs:
+  - podman
 latest:
   github: kubernetes-sigs/kind
 artifacts:
