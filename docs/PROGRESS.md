@@ -15,8 +15,8 @@
 ## 2. 進行中
 
 - 分支 `feat/windows`：計畫 4，把 provision-windows 併入成 Windows 平台。計畫與設計文件只存本機，在主工作樹的 `docs/superpowers/` 底下。
-- 做到哪：計畫 4 的 Task 2（Windows 平台判斷）、Task 3（參數改走子行程環境變數）、Task 5（宣告式登錄值執行器）已完成並通過審查。Windows 專屬的測試只驗過能編譯，要等 Task 8 的 `windows.yml` 在 Actions 上實跑。
-- 下一步：等計畫 2 的引擎前置分支 merge 回 main，把本分支 rebase 上去，再做 Task 1、4、6、7。
+- 做到哪：已 rebase 到計畫 2 A 段 merge 之後的 main。計畫 4 的 Task 1 到 7（schema、平台判斷、參數環境變數、PowerShell runner、登錄值執行器、身分與路徑、狀態檔與 restore）已完成並通過審查。Task 8 的 harness、`windows.yml` 與測試配方 `winhello`、`winhellouser` 已 commit，還沒 push。Windows 專屬的程式與測試只驗過能編譯。
+- 下一步：push 本分支，在 Actions 跑 `windows.yml`，修到全綠，再做 Task 9（vm 場地）。
 
 ## 3. 待辦
 
