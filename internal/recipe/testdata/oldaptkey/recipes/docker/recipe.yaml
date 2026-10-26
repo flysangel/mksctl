@@ -1,0 +1,8 @@
+venue: lxc
+apt_source:
+  file: docker.sources
+  uris: https://download.docker.com/linux/{{.OSID}}
+  suites: "{{.Codename}}"
+  components: stable
+  signed_by: /etc/apt/keyrings/docker.asc
+  key_url: https://download.docker.com/linux/{{.OSID}}/gpg

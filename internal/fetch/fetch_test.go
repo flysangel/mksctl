@@ -371,3 +371,137 @@ func TestErrorsAreDistinct(t *testing.T) {
 	assert.False(t, errors.Is(ErrTrustMismatch, ErrChecksumMismatch))
 	assert.False(t, errors.Is(ErrUnverified, ErrChecksumMismatch))
 }
+
+// sumProvider 依 (版本, 檔名) 回固定雜湊，模擬 godev 這類在 API 裡公布雜湊的上游。
+type sumProvider struct {
+	sums map[string]string
+	got  []string
+}
+
+func (p *sumProvider) Latest(context.Context, *upstream.Client) (string, error) { return "v1", nil }
+
+func (p *sumProvider) Checksum(_ context.Context, _ *upstream.Client, version, filename string) (string, error) {
+	p.got = append(p.got, version+"/"+filename)
+	s, ok := p.sums[version+"/"+filename]
+	if !ok {
+		return "", fmt.Errorf("沒有 %s", filename)
+	}
+	return s, nil
+}
+
+func registerProvider(t *testing.T, name string, p upstream.Provider) {
+	t.Helper()
+	upstream.Providers[name] = p
+	t.Cleanup(func() { delete(upstream.Providers, name) })
+}
+
+func TestGetProviderChecksum(t *testing.T) {
+	srv := fileServer(t, map[string][]byte{"/v1/tool.tar.gz": payload}, nil)
+	p := &sumProvider{sums: map[string]string{"v1/tool.tar.gz": hexSum(payload)}}
+	registerProvider(t, "test-sum", p)
+	f := newFetcher(t, srv)
+	a := recipe.Artifact{ID: "tool", URL: srv.URL + "/{{.Version}}/tool.tar.gz",
+		Checksum: recipe.ChecksumSpec{Provider: "test-sum"}}
+	res, err := f.Get(context.Background(), a, "v1")
+	require.NoError(t, err)
+	assert.Equal(t, hexSum(payload), res.SHA256)
+	assert.Equal(t, []string{"v1/tool.tar.gz"}, p.got)
+
+	p.sums["v1/tool.tar.gz"] = hexSum(other)
+	f = newFetcher(t, srv)
+	_, err = f.Get(context.Background(), a, "v1")
+	require.ErrorIs(t, err, ErrChecksumMismatch)
+	dirEmpty(t, f.Dir)
+}
+
+// provider 查不到雜湊時不往下試 trust 或 GitHub digest：作者指定了來源，查不到就是有問題。
+func TestGetProviderMissingIsUnverified(t *testing.T) {
+	srv := fileServer(t, map[string][]byte{"/tool.tar.gz": payload}, nil)
+	registerProvider(t, "test-sum", &sumProvider{sums: map[string]string{}})
+	f := newFetcher(t, srv)
+	a := recipe.Artifact{ID: "tool", URL: srv.URL + "/tool.tar.gz",
+		Checksum: recipe.ChecksumSpec{Provider: "test-sum", Trust: true}}
+	_, err := f.Get(context.Background(), a, "v1")
+	require.ErrorIs(t, err, ErrUnverified)
+	dirEmpty(t, f.Dir)
+}
+
+// provider 排在 file 前面：兩者都設時由 provider 決定，file 不會被下載。
+func TestGetProviderBeforeFile(t *testing.T) {
+	var fileHit atomic.Bool
+	srv := fileServer(t, map[string][]byte{"/tool.tar.gz": payload}, func(r *http.Request) {
+		if r.URL.Path == "/tool.tar.gz.sha256" {
+			fileHit.Store(true)
+		}
+	})
+	registerProvider(t, "test-sum", &sumProvider{sums: map[string]string{"v1/tool.tar.gz": hexSum(payload)}})
+	f := newFetcher(t, srv)
+	a := recipe.Artifact{ID: "tool", URL: srv.URL + "/tool.tar.gz",
+		Checksum: recipe.ChecksumSpec{Provider: "test-sum", File: "{{.URL}}.sha256"}}
+	_, err := f.Get(context.Background(), a, "v1")
+	require.NoError(t, err)
+	assert.False(t, fileHit.Load())
+}
+
+// TUF 暫時失敗不能被記住：第一次失敗、第二次成功，第二次呼叫要拿到信任根。
+func TestTrustedRootRetriesAfterError(t *testing.T) {
+	calls := 0
+	good := loadTestRoot(t)
+	f := &Fetcher{fetchRoot: func(context.Context, string) (root.TrustedMaterial, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("tuf 暫時失敗")
+		}
+		return good, nil
+	}}
+	_, err := f.trustedMaterial(context.Background())
+	require.Error(t, err)
+	got, err := f.trustedMaterial(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	// 成功之後就快取，不再重抓。
+	_, err = f.trustedMaterial(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 2, calls)
+}
+
+// 錯誤訊息要直接告訴使用者下一步，不必先去查文件。
+func TestTrustMismatchMessageMentionsRefresh(t *testing.T) {
+	srv := fileServer(t, map[string][]byte{"/tool": payload}, nil)
+	f := newFetcher(t, srv)
+	f.Recipe = "gitkraken"
+	f.Trust = TrustDB{"tool": {URL: srv.URL + "/tool", Size: int64(len(payload)), SHA256: hexSum(other)}}
+	a := recipe.Artifact{ID: "tool", URL: srv.URL + "/tool", Checksum: recipe.ChecksumSpec{Trust: true}}
+	_, err := f.Get(context.Background(), a, "v1")
+	require.ErrorIs(t, err, ErrTrustMismatch)
+	assert.Contains(t, err.Error(), "上游的檔已更新，執行 task trust:refresh -- gitkraken 重新驗證")
+}
+
+// 其他雜湊來源的錯誤不該帶這句：那些來源跟 trust:refresh 無關。
+func TestChecksumMismatchHasNoRefreshHint(t *testing.T) {
+	srv := fileServer(t, map[string][]byte{
+		"/helm.tar.gz":   payload,
+		"/checksums.txt": []byte(fmt.Sprintf("%s  helm.tar.gz\n", hexSum(other))),
+	}, nil)
+	f := newFetcher(t, srv)
+	f.Recipe = "helm"
+	a := recipe.Artifact{ID: "helm", URL: srv.URL + "/helm.tar.gz",
+		Checksum: recipe.ChecksumSpec{File: srv.URL + "/checksums.txt"}}
+	_, err := f.Get(context.Background(), a, "v1")
+	require.ErrorIs(t, err, ErrChecksumMismatch)
+	assert.NotContains(t, err.Error(), "trust:refresh")
+}
+
+// 網址變了（例如版本升級）而 trust 還記著舊網址時，錯誤要帶修法。
+func TestTrustMissingMessageMentionsRefresh(t *testing.T) {
+	srv := fileServer(t, map[string][]byte{"/tool-v2": payload}, nil)
+	f := newFetcher(t, srv)
+	f.Recipe = "gitkraken"
+	f.Trust = TrustDB{"tool": {URL: srv.URL + "/tool-v1", Size: int64(len(payload)), SHA256: hexSum(payload)}}
+	a := recipe.Artifact{ID: "tool", URL: srv.URL + "/tool-v2", Checksum: recipe.ChecksumSpec{Trust: true}}
+	_, err := f.Get(context.Background(), a, "v2")
+	require.ErrorIs(t, err, ErrUnverified)
+	require.ErrorIs(t, err, ErrTrustMissing)
+	assert.Contains(t, err.Error(), "上游的檔已更新或尚未記錄，執行 task trust:refresh -- gitkraken 重新驗證")
+	dirEmpty(t, f.Dir)
+}

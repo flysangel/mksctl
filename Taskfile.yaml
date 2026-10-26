@@ -26,9 +26,18 @@ tasks:
       - python3 bin/check-taskfile.py
 
   lint:code:
-    desc: "[開發] 離線程式檢查（go vet、Windows 建置、shellcheck、shfmt）。CI 跑這個"
+    desc: "[開發] 離線程式檢查（go vet、gofmt、Windows 建置、shellcheck、shfmt）。CI 跑這個"
     cmds:
       - go vet ./...
+      - |
+        # gofmt -l 只列出沒排版的檔，自己不會失敗，所以要檢查輸出。
+        # 只掃 git 追蹤的檔：.claude/worktrees/ 裡有別的分支的 checkout，不該算進來。
+        unformatted="$(git ls-files -z '*.go' | xargs -0 -r gofmt -l)"
+        if [[ -n "${unformatted}" ]]; then
+          echo "Error: 以下檔案沒有 gofmt 排版（修法：gofmt -w <檔案>）：" >&2
+          echo "${unformatted}" >&2
+          exit 1
+        fi
       - GOOS=windows go build ./...
       - |
         # 目錄可能還沒建，只掃存在的
@@ -51,6 +60,7 @@ tasks:
       - go test ./...
       - bash tests/test_install.sh
       - bash tests/test_check_verified.sh
+      - bash tests/test_trust_refresh.sh
 
   check:verified:
     desc: "[開發] 查 lxc 與 vm 配方的已驗紀錄是否齊全、雜湊相符、7 天內（本機工具，發版 workflow 不用）"
@@ -62,6 +72,20 @@ tasks:
     desc: "[開發] 建置靜態執行檔到 dist/mksctl（發版用 task build VERSION=<tag> 寫入版本）"
     cmds:
       - CGO_ENABLED=0 go build -ldflags "-X github.com/flysangel/mksctl/internal/cli.Version={{.VERSION | default "dev"}}" -o dist/mksctl ./cmd/mksctl
+
+  trust:refresh:
+    desc: "[開發] 重新記錄配方的 trust 雜湊並實測（用法：task trust:refresh -- <配方>）"
+    summary: |
+      給 checksum.trust 的配方用：上游換檔、install 報「與 trust 記錄不符」時跑。
+      下載最新的檔、把 url、size、sha256 併進 trust/hashes.yaml，再跑 task test:recipe。
+      實測失敗會把 trust/hashes.yaml 還原。成功後自己 commit trust/hashes.yaml 並發新 tag。
+    # 引數走環境變數，不嵌進 shell 字串，引數裡有引號也不會斷。
+    env:
+      RECIPE: "{{.CLI_ARGS | default \"\"}}"
+    preconditions:
+      - { sh: '[[ -n "${RECIPE}" ]]', msg: "用法：task trust:refresh -- <配方>（未提供配方）" }
+    cmds:
+      - bash bin/trust-refresh.sh "${RECIPE}"
 
   test:recipe:
     desc: "[開發] 在配方宣告的場地（podman、lxc、vm）實測一個配方（用法：task test:recipe -- <配方>）"

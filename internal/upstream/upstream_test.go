@@ -5,12 +5,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/flysangel/mksctl/internal/recipe"
 )
 
 // countingServer 記錄每個路徑被打了幾次，用來驗證 Latest 的快取。
@@ -54,10 +53,10 @@ func redirectServer(t *testing.T, from, to string) *countingServer {
 func TestLatestGitHubReadsRedirect(t *testing.T) {
 	srv := redirectServer(t, "/stackrox/kube-linter/releases/latest", "/stackrox/kube-linter/releases/tag/v0.8.3")
 	c := &Client{HTTP: srv.Client(), GitHubBase: srv.URL}
-	v, err := c.Latest(context.Background(), recipe.LatestSpec{GitHub: "stackrox/kube-linter"})
+	v, err := c.Latest(context.Background(), LatestSpec{GitHub: "stackrox/kube-linter"})
 	require.NoError(t, err)
 	assert.Equal(t, "v0.8.3", v)
-	v, err = c.Latest(context.Background(), recipe.LatestSpec{GitHub: "stackrox/kube-linter"})
+	v, err = c.Latest(context.Background(), LatestSpec{GitHub: "stackrox/kube-linter"})
 	require.NoError(t, err)
 	assert.Equal(t, "v0.8.3", v)
 	assert.Equal(t, 1, srv.hits("/stackrox/kube-linter/releases/latest"))
@@ -69,7 +68,7 @@ func TestLatestGitHubNoRedirectFails(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 	c := &Client{HTTP: srv.Client(), GitHubBase: srv.URL}
-	_, err := c.Latest(context.Background(), recipe.LatestSpec{GitHub: "a/b"})
+	_, err := c.Latest(context.Background(), LatestSpec{GitHub: "a/b"})
 	require.Error(t, err)
 }
 
@@ -79,7 +78,7 @@ func TestLatestURLTrimsBody(t *testing.T) {
 	})
 	c := &Client{HTTP: srv.Client()}
 	for range 2 {
-		v, err := c.Latest(context.Background(), recipe.LatestSpec{URL: srv.URL + "/stable.txt"})
+		v, err := c.Latest(context.Background(), LatestSpec{URL: srv.URL + "/stable.txt"})
 		require.NoError(t, err)
 		assert.Equal(t, "v3.19.0", v)
 	}
@@ -94,7 +93,7 @@ func TestLatestConcurrentQueriesOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
-			v, err := c.Latest(context.Background(), recipe.LatestSpec{URL: srv.URL + "/v"})
+			v, err := c.Latest(context.Background(), LatestSpec{URL: srv.URL + "/v"})
 			assert.NoError(t, err)
 			assert.Equal(t, "1.2.3", v)
 		})
@@ -107,4 +106,40 @@ func TestEffectiveUsesReplacement(t *testing.T) {
 	assert.Equal(t, "3.16.4", Effective("3.17.0", map[string]string{"3.17.0": "3.16.4"}))
 	assert.Equal(t, "3.18.0", Effective("3.18.0", map[string]string{"3.17.0": "3.16.4"}))
 	assert.Equal(t, "3.18.0", Effective("3.18.0", nil))
+}
+
+// 暫時錯誤不能被記住：第一次 500、第二次正常，第二次呼叫要成功。
+func TestLatestRetriesAfterError(t *testing.T) {
+	var n atomic.Int32
+	srv := newCountingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) == 1 {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte("1.2.3"))
+	})
+	c := &Client{HTTP: srv.Client()}
+	spec := LatestSpec{URL: srv.URL + "/v"}
+	_, err := c.Latest(context.Background(), spec)
+	require.Error(t, err)
+	v, err := c.Latest(context.Background(), spec)
+	require.NoError(t, err)
+	assert.Equal(t, "1.2.3", v)
+	assert.Equal(t, 2, srv.hits("/v"))
+}
+
+// 使用者按 Ctrl-C 取消的第一個呼叫，不能讓之後正常的呼叫也失敗。
+func TestLatestCanceledNotCached(t *testing.T) {
+	srv := newCountingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("1.2.3"))
+	})
+	c := &Client{HTTP: srv.Client()}
+	spec := LatestSpec{URL: srv.URL + "/v"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := c.Latest(ctx, spec)
+	require.Error(t, err)
+	v, err := c.Latest(context.Background(), spec)
+	require.NoError(t, err)
+	assert.Equal(t, "1.2.3", v)
 }

@@ -3,7 +3,7 @@
 # 註記：函式庫不設 set 旗標，set -e 由 runner 組合腳本統一開啟
 #       本配方沒有 latest，每次安裝都會執行；套件已裝時 apt、apk 的安裝是冪等的
 #       不釘版本：ubuntu 取 Docker 官方 apt 來源的最新版，alpine 取 community 的最新版
-#       ubuntu 的 apt 來源由 mksctl 依 recipe.yaml 的 apt_source 寫好，金鑰也由 mksctl 下載
+#       ubuntu 的 apt 來源由 mksctl 依 recipe.yaml 的 apt_sources 寫好，金鑰也由 mksctl 下載
 #       requires: init：沒有 init（容器、chroot）時 mksctl 不會跑本配方，舊 alpine 腳本的 OpenRC 早退由此取代
 #       兩個發行版的套件名稱差異在 pkgmap.yaml
 

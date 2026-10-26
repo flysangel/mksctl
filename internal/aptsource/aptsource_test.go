@@ -108,15 +108,17 @@ func TestFindConflictsNoDirOrUnrelated(t *testing.T) {
 	assert.Empty(t, cs)
 }
 
-func TestWriteDownloadsKeyAndWritesSources(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("KEYDATA"))
-	}))
-	defer srv.Close()
-	s := dockerSource()
-	s.KeyURL = srv.URL + "/gpg"
+// keyFile 寫一個已下載的金鑰檔，模擬第 3 步存在暫存目錄的檔。
+func keyFile(t *testing.T, content string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "key")
+	require.NoError(t, os.WriteFile(p, []byte(content), 0o600))
+	return p
+}
+
+func TestWriteInstallsKeyAndWritesSources(t *testing.T) {
 	root := t.TempDir()
-	require.NoError(t, Write(context.Background(), root, s, ubuntu, srv.Client()))
+	require.NoError(t, Write(root, dockerSource(), ubuntu, keyFile(t, "KEYDATA")))
 
 	key, err := os.ReadFile(filepath.Join(root, "etc/apt/keyrings/docker.asc"))
 	require.NoError(t, err)
@@ -132,15 +134,36 @@ func TestWriteDownloadsKeyAndWritesSources(t *testing.T) {
 	assert.Len(t, ents, 1)
 }
 
-func TestWriteKeyDownloadFailureWritesNothing(t *testing.T) {
+func TestWriteMissingKeyWritesNothing(t *testing.T) {
+	root := t.TempDir()
+	assert.Error(t, Write(root, dockerSource(), ubuntu, filepath.Join(t.TempDir(), "nope")))
+	assert.NoFileExists(t, filepath.Join(root, "etc/apt/sources.list.d/docker.sources"))
+}
+
+func TestFetchKeyDownloadsToDest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("KEYDATA"))
+	}))
+	defer srv.Close()
+	s := dockerSource()
+	s.KeyURL = srv.URL + "/gpg"
+	dest := filepath.Join(t.TempDir(), "sub", "docker.key")
+	require.NoError(t, FetchKey(context.Background(), s, ubuntu, srv.Client(), dest))
+	b, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	assert.Equal(t, "KEYDATA", string(b))
+}
+
+func TestFetchKeyFailureLeavesNoFile(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
 	s := dockerSource()
 	s.KeyURL = srv.URL + "/gpg"
-	root := t.TempDir()
-	assert.Error(t, Write(context.Background(), root, s, ubuntu, srv.Client()))
-	_, err := os.Stat(filepath.Join(root, "etc/apt/sources.list.d/docker.sources"))
-	assert.True(t, os.IsNotExist(err))
+	dest := filepath.Join(t.TempDir(), "docker.key")
+	err := FetchKey(context.Background(), s, ubuntu, srv.Client(), dest)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "404")
+	assert.NoFileExists(t, dest)
 }
 
 func TestFixSharedKeyringNotRemoved(t *testing.T) {
@@ -198,7 +221,7 @@ func TestOneListTwoKeyringsAllCovered(t *testing.T) {
 	assert.Equal(t, "rm /etc/apt/sources.list.d/d.list && rm /etc/apt/keyrings/a.gpg && rm /etc/apt/keyrings/b.gpg", cs[0].Fix)
 }
 
-func TestWriteExpandsKeyURLTemplate(t *testing.T) {
+func TestFetchKeyExpandsKeyURLTemplate(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.URL.Path
@@ -207,6 +230,31 @@ func TestWriteExpandsKeyURLTemplate(t *testing.T) {
 	defer srv.Close()
 	s := dockerSource()
 	s.KeyURL = srv.URL + "/linux/{{.OSID}}/{{.Codename}}/gpg"
-	require.NoError(t, Write(context.Background(), t.TempDir(), s, ubuntu, srv.Client()))
+	require.NoError(t, FetchKey(context.Background(), s, ubuntu, srv.Client(), filepath.Join(t.TempDir(), "k")))
 	assert.Equal(t, "/linux/ubuntu/noble/gpg", got)
+}
+
+// 舊式 /etc/apt/sources.list 的一行式項目也會讓 apt 拒讀，一樣要查；註解行略過。
+func TestFindConflictsScansSourcesList(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "etc/apt/sources.list",
+		"# deb https://download.docker.com/linux/ubuntu noble stable\n"+
+			"deb http://archive.ubuntu.com/ubuntu noble main\n"+
+			"deb [arch=amd64] https://download.docker.com/linux/ubuntu noble stable\n")
+	cs, err := FindConflicts(root, dockerSource(), ubuntu)
+	require.NoError(t, err)
+	require.Len(t, cs, 1)
+	assert.Equal(t, "/etc/apt/sources.list", cs[0].File)
+	assert.Equal(t, "https://download.docker.com/linux/ubuntu", cs[0].URI)
+	// sources.list 還有系統來源，不能建議整檔刪除，只註解掉衝突的行。
+	assert.NotContains(t, cs[0].Fix, "rm ")
+	assert.Contains(t, cs[0].Fix, "/etc/apt/sources.list")
+}
+
+func TestFindConflictsSourcesListCommentOnly(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "etc/apt/sources.list", "# deb https://download.docker.com/linux/ubuntu noble stable\n")
+	cs, err := FindConflicts(root, dockerSource(), ubuntu)
+	require.NoError(t, err)
+	assert.Empty(t, cs)
 }

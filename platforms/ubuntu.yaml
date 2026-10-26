@@ -1,2 +1,21 @@
 provides:
   - time-sync
+# 台灣鏡像與 -proposed、-backports 是使用者決定，沿用舊 provision 的 sources.list。
+# 只在這次要裝 apt 套件時寫入（install.Run 第 5 步）。
+# 用 http 而不是 https：容器映像沒有 ca-certificates 時，https 來源連 apt-get update 都做不了，
+# 也就無法補裝 ca-certificates。完整性由 apt 驗 Release 簽章保證，跟官方預設的 archive.ubuntu.com 一樣。
+apt_mirror:
+  uris: http://free.nchc.org.tw/ubuntu/
+  suites:
+    - "{{.Codename}}"
+    - "{{.Codename}}-updates"
+    - "{{.Codename}}-security"
+    - "{{.Codename}}-proposed"
+    - "{{.Codename}}-backports"
+  components: main restricted universe multiverse
+apt_conf:
+  20auto-upgrades: |
+    # 停用 apt 定期自動更新套件清單：佈建機更新一律由 mksctl 控管，求可重現
+    APT::Periodic::Update-Package-Lists "0";
+    # 停用無人職守自動升級：避免佈建後版本在使用者不知情下漂移
+    APT::Periodic::Unattended-Upgrade "0";

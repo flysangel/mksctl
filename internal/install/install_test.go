@@ -168,13 +168,13 @@ artifacts:
       file: "%[1]s/missing/one.bin.sha256"
 `,
 	"broken2": `venue: podman
-apt_source:
-  file: broken2.sources
-  uris: "%[1]s/broken2"
-  suites: "{{.Codename}}"
-  components: main
-  signed_by: /etc/apt/keyrings/broken2.asc
-  key_url: "%[1]s/broken2.gpg"
+apt_sources:
+  - file: broken2.sources
+    uris: "%[1]s/broken2"
+    suites: "{{.Codename}}"
+    components: main
+    signed_by: /etc/apt/keyrings/broken2.asc
+    key_url: "%[1]s/broken2.gpg"
 artifacts:
   - id: two
     url: "%[1]s/missing/two.bin"
@@ -183,13 +183,28 @@ artifacts:
 `,
 	"docker": `venue: lxc
 packages: [docker-ce]
-apt_source:
-  file: docker.sources
-  uris: "%[1]s/docker"
-  suites: "{{.Codename}}"
-  components: stable
-  signed_by: /etc/apt/keyrings/docker.asc
-  key_url: "%[1]s/docker.gpg"
+apt_sources:
+  - file: docker.sources
+    uris: "%[1]s/docker"
+    suites: "{{.Codename}}"
+    components: stable
+    signed_by: /etc/apt/keyrings/docker.asc
+    key_url: "%[1]s/docker.gpg"
+`,
+	"multiapt": `venue: podman
+apt_sources:
+  - file: multi1.sources
+    uris: "%[1]s/multi1"
+    suites: "{{.Codename}}"
+    components: main
+    signed_by: /etc/apt/keyrings/multi1.asc
+    key_url: "%[1]s/multi1.gpg"
+  - file: multi2.sources
+    uris: "%[1]s/multi2"
+    suites: "{{.Codename}}"
+    components: main
+    signed_by: /etc/apt/keyrings/multi2.asc
+    key_url: "%[1]s/multi2.gpg"
 `,
 	"unv": `venue: podman
 unverified: true
@@ -205,7 +220,60 @@ artifacts:
 	"gpu":       "venue: vm\nrequires: [gpu]\n",
 	"pkgs":      "venue: podman\npackages: [curl, nope, ghost]\n",
 	"curlpkg":   "venue: podman\npackages: [curl]\n",
+	"base":      "venue: vm\npackages: [curl]\n",
+	// dockerdup 跟 docker 寫同一個來源檔名，同一次安裝一起跑就是衝突。
+	"dockerdup": `venue: podman
+apt_sources:
+  - file: docker.sources
+    uris: "%[1]s/dockerdup"
+    suites: "{{.Codename}}"
+    components: stable
+    signed_by: /etc/apt/keyrings/dockerdup.asc
+    key_url: "%[1]s/docker.gpg"
+`,
+	"badkey": `venue: podman
+packages: [curl]
+apt_sources:
+  - file: badkey.sources
+    uris: "%[1]s/badkey"
+    suites: "{{.Codename}}"
+    components: main
+    signed_by: /etc/apt/keyrings/badkey.asc
+    key_url: "%[1]s/missing.gpg"
+`,
 }
+
+// putCloudSources 在 sysroot 放一份雲端映像預設的 ubuntu.sources。
+func putCloudSources(t *testing.T, fx *fixture) string {
+	t.Helper()
+	src := filepath.Join(fx.Sysroot, "etc/apt/sources.list.d/ubuntu.sources")
+	require.NoError(t, os.MkdirAll(filepath.Dir(src), 0o755))
+	require.NoError(t, os.WriteFile(src, []byte(cloudSources), 0o644))
+	return src
+}
+
+// assertMirrorUntouched 證明鏡像與 apt_conf 都沒寫：第 4 步停下時第 5 步不能有任何動作。
+func assertMirrorUntouched(t *testing.T, fx *fixture, src string) {
+	t.Helper()
+	b, err := os.ReadFile(src)
+	require.NoError(t, err)
+	assert.Equal(t, cloudSources, string(b))
+	assert.NoFileExists(t, src+".bk")
+	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/apt.conf.d"))
+}
+
+// testUbuntuLayer 是假的 ubuntu 平台層：鏡像與 apt 設定。
+const testUbuntuLayer = `provides: []
+apt_mirror:
+  uris: http://mirror.example/ubuntu/
+  suites: ["{{.Codename}}", "{{.Codename}}-updates"]
+  components: main universe
+apt_conf:
+  20auto-upgrades: |
+    APT::Periodic::Update-Package-Lists "0";
+`
+
+const cloudSources = "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: noble\nComponents: main\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n"
 
 func fakeDeps(t *testing.T, osRelease string) *fixture {
 	t.Helper()
@@ -236,7 +304,7 @@ func fakeDeps(t *testing.T, osRelease string) *fixture {
 			fmt.Fprint(w, "content:"+strings.TrimPrefix(p, "/dl/"))
 		case p == "/dl/unv.bin":
 			fmt.Fprint(w, "unverified-bytes")
-		case p == "/docker.gpg" || p == "/broken2.gpg":
+		case p == "/docker.gpg" || p == "/broken2.gpg" || p == "/multi1.gpg" || p == "/multi2.gpg":
 			fmt.Fprint(w, "KEY")
 		default:
 			http.NotFound(w, r)
@@ -247,7 +315,7 @@ func fakeDeps(t *testing.T, osRelease string) *fixture {
 
 	fsys := fstest.MapFS{
 		"platforms/ubuntu-24.04.yaml": {Data: []byte("provides: []\n")},
-		"platforms/ubuntu.yaml":       {Data: []byte("provides: []\n")},
+		"platforms/ubuntu.yaml":       {Data: []byte(testUbuntuLayer)},
 		"platforms/apt.yaml":          {Data: []byte("provides: [apt, systemd]\n")},
 		"platforms/common.yaml":       {Data: []byte("provides: []\n")},
 		"platforms/alpine-3.22.yaml":  {Data: []byte("repositories: [\"https://dl-cdn.example/v3.22/community\"]\n")},
@@ -323,7 +391,8 @@ func TestFetchFailuresCollectedBeforeAnySourceWritten(t *testing.T) {
 	assert.Contains(t, diffs[1].Detail, "two")
 	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/sources.list.d"))
 	assert.NoFileExists(t, filepath.Join(fx.Sysroot, "etc/apt/keyrings/broken2.asc"))
-	assert.False(t, fx.requested("/broken2.gpg"), "金鑰不該在檢查通過前下載")
+	// 金鑰在第 3 步預抓到暫存目錄，但檢查沒過就不能裝到機器上。
+	assert.True(t, fx.requested("/broken2.gpg"), "金鑰要在第 3 步預抓")
 	assert.Zero(t, fx.Index.RefreshCalls())
 	assert.Empty(t, fx.Runner.calls)
 	entries, _ := os.ReadDir(fx.FetchDir)
@@ -346,8 +415,8 @@ func TestDockerCePassesAfterSourceWritten(t *testing.T) {
 
 func TestAptConflictStopsBeforeWrite(t *testing.T) {
 	fx := fakeDeps(t, ubuntu2404)
+	src := putCloudSources(t, fx)
 	dir := filepath.Join(fx.Sysroot, "etc/apt/sources.list.d")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
 	uri := strings.TrimSuffix(fx.Deps.GitHubBase, "/") + "/docker"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "old-docker.list"),
 		[]byte("deb [signed-by=/etc/apt/keyrings/old.gpg] "+uri+" noble stable\n"), 0o644))
@@ -357,7 +426,8 @@ func TestAptConflictStopsBeforeWrite(t *testing.T) {
 	require.Equal(t, []string{"docker/apt-source-conflict"}, kinds(diffs))
 	assert.Contains(t, diffs[0].Detail, "Fix: rm /etc/apt/sources.list.d/old-docker.list")
 	assert.NoFileExists(t, filepath.Join(dir, "docker.sources"))
-	assert.False(t, fx.requested("/docker.gpg"))
+	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/keyrings"))
+	assertMirrorUntouched(t, fx, src)
 	assert.Zero(t, fx.Index.RefreshCalls())
 }
 
@@ -532,7 +602,7 @@ func TestCheckOnlyTouchesNothing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, diffs)
 	assert.Equal(t, before, sysrootFiles(t, fx.Sysroot))
-	assert.False(t, fx.requested("/docker.gpg"), "check 不下載 apt 金鑰")
+	assert.True(t, fx.requested("/docker.gpg"), "check 也要預抓 apt 金鑰，金鑰網址壞了才會在 check 就看到")
 	assert.True(t, fx.requested("/dl/helm-"), "check 仍要下載驗證")
 	assert.Zero(t, fx.Index.RefreshCalls())
 	assert.Empty(t, fx.Runner.calls)
@@ -594,5 +664,141 @@ func TestAlpineSkipsAptSource(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/keyrings"))
 	assert.False(t, fx.requested("/docker.gpg"), "不該對金鑰網址發請求")
 	assert.Equal(t, []string{"docker"}, fx.Runner.calls)
-	assert.Contains(t, fx.Stdout.String(), "Info: docker 的 apt_source 在這個平台不適用，略過")
+	assert.Contains(t, fx.Stdout.String(), "Info: docker 的 apt_sources 在這個平台不適用，略過")
+}
+
+// 一個配方宣告多個 apt 來源時，每一筆都要查衝突、下載金鑰並寫入。
+func TestInstallWritesEveryAptSource(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"multiapt"}})
+	require.NoError(t, err)
+	require.Empty(t, diffs)
+	for _, n := range []string{"multi1", "multi2"} {
+		assert.FileExists(t, filepath.Join(fx.Sysroot, "etc/apt/sources.list.d/"+n+".sources"))
+		assert.FileExists(t, filepath.Join(fx.Sysroot, "etc/apt/keyrings/"+n+".asc"))
+	}
+	assert.Equal(t, []string{"multiapt"}, fx.Runner.calls)
+}
+
+// 衝突要逐筆查：第二筆來源撞到舊 .list 時也要停下，而且第一筆也不能先寫。
+func TestInstallChecksEveryAptSourceForConflicts(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	src := putCloudSources(t, fx)
+	dir := filepath.Join(fx.Sysroot, "etc/apt/sources.list.d")
+	uri := strings.TrimSuffix(fx.Deps.GitHubBase, "/") + "/multi2"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "old-multi2.list"),
+		[]byte("deb [signed-by=/usr/share/keyrings/old.gpg] "+uri+" noble main\n"), 0o644))
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"multiapt"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"multiapt/apt-source-conflict"}, kinds(diffs))
+	assert.NoFileExists(t, filepath.Join(dir, "multi1.sources"))
+	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/keyrings"))
+	assertMirrorUntouched(t, fx, src)
+}
+
+// 金鑰網址壞了是下載失敗：在第 3 步就停，機器上什麼都沒寫，也沒更新索引。
+func TestKeyFetchFailureBeforeAnyWrite(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"badkey"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"badkey/fetch-failed"}, kinds(diffs))
+	assert.Contains(t, diffs[0].Detail, "badkey.sources")
+	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/sources.list.d"))
+	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/keyrings"))
+	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/apt.conf.d"))
+	assert.Zero(t, fx.Index.RefreshCalls())
+	assert.Empty(t, fx.Runner.calls)
+}
+
+// 同一次安裝裡兩個配方寫同一個來源檔名，後寫的會蓋掉先寫的，要在寫入前擋下。
+func TestSameAptFileAcrossRecipes(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"docker", "dockerdup"}})
+	require.NoError(t, err)
+	require.Contains(t, kinds(diffs), "dockerdup/apt-source-conflict")
+	for _, d := range diffs {
+		if d.Recipe == "dockerdup" {
+			assert.Contains(t, d.Detail, "docker.sources")
+			assert.Contains(t, d.Detail, "docker")
+		}
+	}
+	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/sources.list.d"))
+	assert.Zero(t, fx.Index.RefreshCalls())
+}
+
+// 只下載執行檔的配方不需要套件，鏡像與 apt 設定都不寫。
+func TestMirrorOnlyWhenPackagesNeeded(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	src := filepath.Join(fx.Sysroot, "etc/apt/sources.list.d/ubuntu.sources")
+	require.NoError(t, os.MkdirAll(filepath.Dir(src), 0o755))
+	require.NoError(t, os.WriteFile(src, []byte(cloudSources), 0o644))
+
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"helm"}})
+	require.NoError(t, err)
+	require.Empty(t, diffs)
+	b, err := os.ReadFile(src)
+	require.NoError(t, err)
+	assert.Equal(t, cloudSources, string(b))
+	assert.NoFileExists(t, src+".bk")
+	assert.NoDirExists(t, filepath.Join(fx.Sysroot, "etc/apt/apt.conf.d"))
+	assert.Zero(t, fx.Index.RefreshCalls())
+}
+
+// 要裝套件時，第 5 步先寫鏡像與 apt 設定，再更新索引。
+func TestAptConfWritten(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	src := filepath.Join(fx.Sysroot, "etc/apt/sources.list.d/ubuntu.sources")
+	require.NoError(t, os.MkdirAll(filepath.Dir(src), 0o755))
+	require.NoError(t, os.WriteFile(src, []byte(cloudSources), 0o644))
+
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"base"}})
+	require.NoError(t, err)
+	require.Empty(t, diffs)
+	b, err := os.ReadFile(filepath.Join(fx.Sysroot, "etc/apt/apt.conf.d/20auto-upgrades"))
+	require.NoError(t, err)
+	assert.Equal(t, "APT::Periodic::Update-Package-Lists \"0\";\n", string(b))
+	b, err = os.ReadFile(src)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), "URIs: http://mirror.example/ubuntu/\n")
+	assert.Contains(t, string(b), "Suites: noble noble-updates\n")
+	bk, err := os.ReadFile(src + ".bk")
+	require.NoError(t, err)
+	assert.Equal(t, cloudSources, string(bk))
+	assert.Contains(t, fx.Stdout.String(), "Info: apt 鏡像改為 http://mirror.example/ubuntu/")
+	assert.NotContains(t, fx.Stdout.String(), "sources.list.bk", "沒有清 legacy sources.list 就不該提它")
+	assert.Equal(t, 1, fx.Index.RefreshCalls())
+	assert.Equal(t, []string{"base"}, fx.Runner.calls)
+}
+
+// 已裝到機器上的金鑰來自第 3 步的下載，第 5 步不再發請求。
+func TestAptKeyFetchedOnce(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"docker"}})
+	require.NoError(t, err)
+	require.Empty(t, diffs)
+	n := 0
+	fx.mu.Lock()
+	for _, p := range fx.paths {
+		if p == "/docker.gpg" {
+			n++
+		}
+	}
+	fx.mu.Unlock()
+	assert.Equal(t, 1, n)
+	b, err := os.ReadFile(filepath.Join(fx.Sysroot, "etc/apt/keyrings/docker.asc"))
+	require.NoError(t, err)
+	assert.Equal(t, "KEY", string(b))
+}
+
+// legacy sources.list 有 deb 行時，清空它的訊息另外印一句。
+func TestLegacyClearMessage(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	putCloudSources(t, fx)
+	legacy := filepath.Join(fx.Sysroot, "etc/apt/sources.list")
+	require.NoError(t, os.WriteFile(legacy, []byte("deb http://old.example/ubuntu noble main\n"), 0o644))
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"base"}})
+	require.NoError(t, err)
+	require.Empty(t, diffs)
+	assert.Contains(t, fx.Stdout.String(), "Info: 已清空 /etc/apt/sources.list 的來源，原內容備份在 /etc/apt/sources.list.bk")
+	assert.FileExists(t, legacy+".bk")
 }

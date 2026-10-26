@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/flysangel/mksctl/internal/platform"
+	"github.com/flysangel/mksctl/internal/upstream"
 	"gopkg.in/yaml.v3"
 )
 
@@ -101,9 +102,34 @@ func Validate(c Catalog, defs platform.Defs) []error {
 			if s := a.Checksum.Sigstore; s != nil {
 				validateSigstore(n, a.ID, *s, add)
 			}
+			if pv := a.Checksum.Provider; pv != "" {
+				if _, ok := upstream.Providers[pv]; !ok {
+					add("配方 %s：artifact %q 的 checksum.provider %q 不存在", n, a.ID, pv)
+				}
+			}
 		}
-		if l := r.Latest; l != nil && (l.GitHub == "") == (l.URL == "") {
-			add("配方 %s：latest 的 github 與 url 要擇一", n)
+		if l := r.Latest; l != nil {
+			set := 0
+			for _, v := range []string{l.GitHub, l.URL, l.Provider} {
+				if v != "" {
+					set++
+				}
+			}
+			if set != 1 {
+				add("配方 %s：latest 的 github、url、provider 要擇一", n)
+			} else if l.Provider != "" {
+				if _, ok := upstream.Providers[l.Provider]; !ok {
+					add("配方 %s：latest.provider %q 不存在", n, l.Provider)
+				}
+			}
+		}
+		// 同一個配方寫兩次同名的 .sources，後寫的會蓋掉前一筆，第一個來源就靜默消失。
+		files := map[string]bool{}
+		for _, s := range r.AptSources {
+			if files[s.File] {
+				add("配方 %s：apt_sources 的 file %q 重複", n, s.File)
+			}
+			files[s.File] = true
 		}
 	}
 	return errs

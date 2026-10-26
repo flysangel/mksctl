@@ -1,0 +1,18 @@
+{
+  "IIC": [
+    {
+      "date": "2025-12-08",
+      "type": "release",
+      "downloads": {
+        "linux": {
+          "link": "https://download.jetbrains.com/idea/ideaIC-2025.2.6.2.tar.gz",
+          "size": 1515485267,
+          "checksumLink": "https://download.jetbrains.com/idea/ideaIC-2025.2.6.2.tar.gz.sha256"
+        }
+      },
+      "version": "2025.2.6.2",
+      "majorVersion": "2025.2",
+      "build": "252.28539.54"
+    }
+  ]
+}

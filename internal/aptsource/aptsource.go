@@ -22,7 +22,12 @@ import (
 	"github.com/flysangel/mksctl/internal/recipe"
 )
 
-const sourcesDir = "etc/apt/sources.list.d"
+const (
+	sourcesDir = "etc/apt/sources.list.d"
+	// legacyList 是舊式一行格式的主來源檔。舊 provision 把鏡像寫在這裡，
+	// 它跟 sources.list.d 一樣會讓同 URI 不同 Signed-By 的 apt 拒讀全部來源。
+	legacyList = "etc/apt/sources.list"
+)
 
 // Conflict 描述一個會讓 apt 壞掉的既有來源。
 type Conflict struct {
@@ -171,7 +176,7 @@ func parseSources(data string) []entry {
 	return out
 }
 
-// FindConflicts 掃 sysroot 底下的 etc/apt/sources.list.d/*.list 與 *.sources。
+// FindConflicts 掃 sysroot 底下的 etc/apt/sources.list.d/*.list、*.sources 與 etc/apt/sources.list。
 // 衝突有兩種：同一個 URI 出現在目標檔以外的檔案，或目標檔已存在但 Signed-By 不同。
 // 同檔同 Signed-By 是重跑，不算衝突。
 func FindConflicts(sysroot string, s recipe.AptSource, p platform.Platform) ([]Conflict, error) {
@@ -183,20 +188,25 @@ func FindConflicts(sysroot string, s recipe.AptSource, p platform.Platform) ([]C
 	for _, u := range strings.Fields(r.uris) {
 		ours[normURI(u)] = true
 	}
-	ents, err := os.ReadDir(filepath.Join(sysroot, sourcesDir))
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
 	type parsed struct {
 		name     string
+		abs      string
 		isList   bool
 		isTarget bool
+		// isLegacy 是 /etc/apt/sources.list：裡面通常還有系統自己的來源，不能建議整檔刪除。
+		isLegacy bool
 		entries  []entry
 	}
 	var files []parsed
+	if data, err := os.ReadFile(filepath.Join(sysroot, legacyList)); err == nil {
+		files = append(files, parsed{name: "sources.list", abs: "/" + legacyList, isList: true, isLegacy: true, entries: parseList(string(data))})
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	ents, err := os.ReadDir(filepath.Join(sysroot, sourcesDir))
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
 	for _, de := range ents {
 		name := de.Name()
 		isList := strings.HasSuffix(name, ".list")
@@ -207,7 +217,7 @@ func FindConflicts(sysroot string, s recipe.AptSource, p platform.Platform) ([]C
 		if err != nil {
 			return nil, err
 		}
-		pf := parsed{name: name, isList: isList, isTarget: name == s.File}
+		pf := parsed{name: name, abs: "/" + sourcesDir + "/" + name, isList: isList, isTarget: name == s.File}
 		if isList {
 			pf.entries = parseList(string(data))
 		} else {
@@ -218,17 +228,15 @@ func FindConflicts(sysroot string, s recipe.AptSource, p platform.Platform) ([]C
 
 	// 第一輪：找出每個檔的衝突 URI 與其他（不衝突的）URI。
 	type hit struct {
-		pf        parsed
-		conflict  []string
-		others    []string
-		keyrings  []string // 衝突行的 signed-by，已去重
-		abs       string
-		isRemoved bool
+		pf       parsed
+		conflict []string
+		others   []string
+		keyrings []string // 衝突行的 signed-by，已去重
 	}
 	var hits []*hit
 	removed := map[string]bool{}
 	for _, pf := range files {
-		h := &hit{pf: pf, abs: "/" + sourcesDir + "/" + pf.name}
+		h := &hit{pf: pf}
 		seenKR := map[string]bool{}
 		for _, e := range pf.entries {
 			isConf := false
@@ -249,17 +257,23 @@ func FindConflicts(sysroot string, s recipe.AptSource, p platform.Platform) ([]C
 		}
 		if len(h.conflict) > 0 {
 			hits = append(hits, h)
-			removed[pf.name] = true
+			// sources.list 只註解衝突的行、不整檔刪，其餘行引用的 keyring 仍在用。
+			if !pf.isLegacy {
+				removed[pf.abs] = true
+			}
 		}
 	}
 
 	// 其餘（會留下的）檔案還在引用的 keyring，不能刪。
 	stillUsed := map[string]bool{}
 	for _, pf := range files {
-		if removed[pf.name] {
+		if removed[pf.abs] {
 			continue
 		}
 		for _, e := range pf.entries {
+			if pf.isLegacy && entryHits(e, ours) {
+				continue // 會被註解掉的行不算還在用。
+			}
 			if e.signedBy != "" {
 				stillUsed[path.Clean(e.signedBy)] = true
 			}
@@ -268,8 +282,14 @@ func FindConflicts(sysroot string, s recipe.AptSource, p platform.Platform) ([]C
 
 	var cs []Conflict
 	for _, h := range hits {
-		c := Conflict{File: h.abs, URI: strings.Join(h.conflict, " ")}
-		fix := "rm " + shellQuote(h.abs)
+		c := Conflict{File: h.pf.abs, URI: strings.Join(h.conflict, " ")}
+		if h.pf.isLegacy {
+			c.Reason = "同一個 URI 已出現在 /etc/apt/sources.list，apt 會因 Signed-By 不一致而拒讀全部來源"
+			c.Fix = commentOutFix(h.pf.abs, h.conflict)
+			cs = append(cs, c)
+			continue
+		}
+		fix := "rm " + shellQuote(h.pf.abs)
 		if h.pf.isTarget {
 			c.Reason = fmt.Sprintf("同一個來源檔的 Signed-By 與要寫的 %q 不同", r.signedBy)
 		} else {
@@ -294,6 +314,44 @@ func FindConflicts(sysroot string, s recipe.AptSource, p platform.Platform) ([]C
 		cs = append(cs, c)
 	}
 	return cs, nil
+}
+
+func entryHits(e entry, ours map[string]bool) bool {
+	for _, u := range e.uris {
+		if ours[normURI(u)] {
+			return true
+		}
+	}
+	return false
+}
+
+// commentOutFix 產生註解掉衝突行的 sed 指令。sources.list 通常還有系統來源，整檔刪掉 apt 就沒有來源可用。
+func commentOutFix(file string, uris []string) string {
+	seen := map[string]bool{}
+	var args []string
+	for _, u := range uris {
+		u = normURI(u)
+		if seen[u] {
+			continue
+		}
+		seen[u] = true
+		// 行首是 deb 或 deb-src、URI 後面接可有可無的斜線再接空白，才算命中，避免誤註解前綴相同的 URI。
+		script := `/^[[:space:]]*deb.*[[:space:]]` + breEscape(u) + `\/\{0,1\}[[:space:]]/s/^/# /`
+		args = append(args, "-e "+shellQuote(script))
+	}
+	return "sed -i " + strings.Join(args, " ") + " " + shellQuote(file)
+}
+
+// breEscape 跳脫 sed 基本正規表示式的特殊字元，以及當分隔字元用的斜線。
+func breEscape(s string) string {
+	var b strings.Builder
+	for _, c := range s {
+		if strings.ContainsRune(`\.[]*^$/`, c) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
 }
 
 var safeShell = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
@@ -338,18 +396,10 @@ func writeAtomic(path string, data []byte) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-// Write 下載金鑰（原樣存放，不論 ASCII-armored 或二進位）並寫入 .sources。
-// 金鑰先成功才寫來源檔，下載失敗時不留下指向不存在金鑰的來源。
-// 本函式不呼叫 FindConflicts，呼叫端要先查。
-func Write(ctx context.Context, sysroot string, s recipe.AptSource, p platform.Platform, client *http.Client) error {
-	content, err := Render(s, p)
-	if err != nil {
-		return err
-	}
-	r, err := renderFields(s, p)
-	if err != nil {
-		return err
-	}
+// FetchKey 下載金鑰到 dest，原樣存放（不論 ASCII-armored 或二進位）。
+// install.Run 在第 3 步呼叫它，把金鑰放進這次的暫存目錄：網址壞了在檢查階段就會發現，
+// 不必等到第 5 步已經寫了別的來源才失敗。失敗時不留下檔案。
+func FetchKey(ctx context.Context, s recipe.AptSource, p platform.Platform, client *http.Client, dest string) error {
 	keyURL, err := expand("key_url", s.KeyURL, p)
 	if err != nil {
 		return err
@@ -369,6 +419,25 @@ func Write(ctx context.Context, sysroot string, s recipe.AptSource, p platform.P
 	key, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return fmt.Errorf("aptsource: 讀取金鑰失敗：%w", err)
+	}
+	return writeAtomic(dest, key)
+}
+
+// Write 把 FetchKey 預抓的金鑰裝到 Signed-By 路徑，再寫入 .sources。
+// 金鑰先成功才寫來源檔，不留下指向不存在金鑰的來源。
+// 本函式不呼叫 FindConflicts，呼叫端要先查。
+func Write(sysroot string, s recipe.AptSource, p platform.Platform, keyPath string) error {
+	content, err := Render(s, p)
+	if err != nil {
+		return err
+	}
+	r, err := renderFields(s, p)
+	if err != nil {
+		return err
+	}
+	key, err := os.ReadFile(keyPath)
+	if err != nil {
+		return fmt.Errorf("aptsource: 讀取預抓的金鑰失敗：%w", err)
 	}
 	if err := writeAtomic(filepath.Join(sysroot, r.signedBy), key); err != nil {
 		return err
