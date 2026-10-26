@@ -23,7 +23,10 @@ import (
 
 	"golang.org/x/term"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/flysangel/mksctl"
+	"github.com/flysangel/mksctl/internal/fetch"
 	"github.com/flysangel/mksctl/internal/install"
 	"github.com/flysangel/mksctl/internal/pkgindex"
 	"github.com/flysangel/mksctl/internal/pkgmap"
@@ -159,6 +162,9 @@ func run(e env, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		err = cmdFetch(e, rest, stdout)
 	case "pkgname":
 		err = cmdPkgname(e, rest, stdout)
+	case "trust-record":
+		// 隱藏子命令：不列在 usage，只給 bin/trust-refresh.sh 呼叫。
+		err = cmdTrustRecord(ctx, e, rest, stdout)
 	case "version":
 		if len(rest) > 0 {
 			err = usageErr("version 不收參數")
@@ -566,5 +572,119 @@ func cmdUpdate(ctx context.Context, e env, args []string, stdout io.Writer) erro
 		return nil
 	}
 	fmt.Fprintf(stdout, "Success: mksctl 已從 %s 更新到 %s\n", res.From, res.To)
+	return nil
+}
+
+// trustHashesPath 是 trust-record --write 要更新的檔，相對工作目錄（repo 根）。
+const trustHashesPath = "trust/hashes.yaml"
+
+// cmdTrustRecord 對配方每個 checksum.trust 的 artifact 查最新版、下載、印出該記進
+// trust/hashes.yaml 的 YAML。不需要 root，也不寫 sysroot；只有 --write 會改 repo 的 trust/hashes.yaml。
+// --catalog <目錄> 是測試用：從該目錄的 recipes/ 載入配方，取代嵌入的 FS，讓 shell 測試不必先建一個真的 trust 配方。
+func cmdTrustRecord(ctx context.Context, e env, args []string, stdout io.Writer) error {
+	fset := flag.NewFlagSet("trust-record", flag.ContinueOnError)
+	write := fset.Bool("write", false, "")
+	catalog := fset.String("catalog", "", "")
+	pos, err := parseInterspersed(fset, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("用法：mksctl trust-record [--write] <配方>")
+	}
+	name := pos[0]
+
+	fsys := e.fsys
+	if *catalog != "" {
+		fsys = os.DirFS(*catalog)
+	}
+	cat, err := recipe.Load(fsys)
+	if err != nil {
+		return err
+	}
+	r, ok := cat[name]
+	if !ok {
+		return fmt.Errorf("沒有配方 %s", name)
+	}
+
+	version := ""
+	if r.Latest != nil {
+		latest, err := e.upstream().Latest(ctx, *r.Latest)
+		if err != nil {
+			return fmt.Errorf("查 %s 的最新版：%w", name, err)
+		}
+		version = upstream.Effective(latest, r.Exclude)
+	}
+
+	// 下載檔只是為了算雜湊，放暫存目錄，結束就刪。
+	dir, err := os.MkdirTemp("", "mksctl-trust-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	f := &fetch.Fetcher{Upstream: e.upstream(), Dir: dir}
+
+	rec := fetch.TrustDB{}
+	for _, a := range r.Artifacts {
+		if !a.Checksum.Trust {
+			continue
+		}
+		ent, err := f.Record(ctx, a, version)
+		if err != nil {
+			return fmt.Errorf("%s：%w", a.ID, err)
+		}
+		rec[name+"/"+a.ID] = ent
+	}
+	if len(rec) == 0 {
+		return fmt.Errorf("配方 %s 沒有 checksum.trust 的 artifact", name)
+	}
+
+	if !*write {
+		b, err := yaml.Marshal(rec)
+		if err != nil {
+			return err
+		}
+		_, err = stdout.Write(b)
+		return err
+	}
+	return mergeTrustFile(trustHashesPath, rec)
+}
+
+// mergeTrustFile 把 rec 併進 path：同鍵取代，其餘保留。yaml.v3 輸出時鍵按字母排序，所以順序固定；
+// 檔頭連續的註解與空行原樣保留。寫入先寫同目錄暫存檔再 rename，中途失敗不會留下半個檔。
+func mergeTrustFile(path string, rec fetch.TrustDB) error {
+	old, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("讀 %s（要在 repo 根執行）：%w", path, err)
+	}
+	db, err := fetch.LoadTrust(old)
+	if err != nil {
+		return err
+	}
+	if db == nil {
+		db = fetch.TrustDB{}
+	}
+	for k, v := range rec {
+		db[k] = v
+	}
+	var header strings.Builder
+	for _, line := range strings.SplitAfter(string(old), "\n") {
+		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
+			break
+		}
+		header.WriteString(line)
+	}
+	body, err := yaml.Marshal(db)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append([]byte(header.String()), body...), 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
 	return nil
 }

@@ -412,6 +412,7 @@ func fetchAll(ctx context.Context, f *fetch.Fetcher, up *upstream.Client, hc *ht
 		}
 		// 每個配方一個子目錄：不同配方的 artifact 檔名可能相同。
 		f.Dir = filepath.Join(fetchDir, r.Name)
+		f.Recipe = r.Name
 		if err := os.MkdirAll(f.Dir, 0o755); err != nil {
 			return nil, nil, nil, nil, err
 		}

@@ -522,3 +522,60 @@ func TestFetchWithoutRecipeEnv(t *testing.T) {
 	assert.Empty(t, out)
 	assert.Equal(t, "Error: 缺 MKSCTL_RECIPE（只能在配方內呼叫）\n", errOut)
 }
+
+func TestTrustRecordPrintsYAML(t *testing.T) {
+	body := []byte("fake-artifact-bytes")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) }))
+	defer srv.Close()
+	sum := fmt.Sprintf("%x", sha256.Sum256(body))
+
+	code, out, errOut := runCLI(t, withUID(1000), withFS(map[string]string{
+		"recipes/tool/recipe.yaml": "venue: vm\nartifacts:\n  - id: pkg\n    url: " + srv.URL + "/tool.deb\n    checksum: {trust: true}\n" +
+			"  - id: sig\n    url: " + srv.URL + "/other\n    checksum: {github_digest: true}\n",
+	}), "trust-record", "tool")
+	require.Equal(t, 0, code, errOut)
+	// 只印 trust: true 的 artifact，鍵是 <配方>/<artifact ID>。
+	want := "tool/pkg:\n    url: " + srv.URL + "/tool.deb\n    size: 19\n    sha256: " + sum + "\n"
+	assert.Equal(t, want, out)
+}
+
+func TestTrustRecordNeedsRecipeName(t *testing.T) {
+	code, _, errOut := runCLI(t, "trust-record")
+	assert.Equal(t, 2, code)
+	assert.Contains(t, errOut, "trust-record")
+}
+
+func TestTrustRecordHiddenFromUsage(t *testing.T) {
+	assert.NotContains(t, usageBody, "trust-record")
+}
+
+func TestTrustRecordNoTrustArtifact(t *testing.T) {
+	code, _, errOut := runCLI(t, "trust-record", "helm")
+	assert.Equal(t, 1, code)
+	assert.Contains(t, errOut, "沒有 checksum.trust 的 artifact")
+}
+
+func TestTrustRecordWriteMerges(t *testing.T) {
+	body := []byte("fake-artifact-bytes")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) }))
+	defer srv.Close()
+	sum := fmt.Sprintf("%x", sha256.Sum256(body))
+
+	root := t.TempDir()
+	old := "# 頭註解\nzzz/old:\n    url: http://x/old\n    size: 1\n    sha256: " + strings.Repeat("a", 64) + "\n" +
+		"tool/pkg:\n    url: http://x/stale\n    size: 1\n    sha256: " + strings.Repeat("b", 64) + "\n"
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "trust"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "trust/hashes.yaml"), []byte(old), 0o644))
+	t.Chdir(root)
+
+	code, out, errOut := runCLI(t, withUID(1000), withFS(map[string]string{
+		"recipes/tool/recipe.yaml": "venue: vm\nartifacts:\n  - id: pkg\n    url: " + srv.URL + "/tool.deb\n    checksum: {trust: true}\n",
+	}), "trust-record", "--write", "tool")
+	require.Equal(t, 0, code, errOut)
+	assert.Empty(t, out)
+	got, err := os.ReadFile(filepath.Join(root, "trust/hashes.yaml"))
+	require.NoError(t, err)
+	want := "# 頭註解\ntool/pkg:\n    url: " + srv.URL + "/tool.deb\n    size: 19\n    sha256: " + sum + "\n" +
+		"zzz/old:\n    url: http://x/old\n    size: 1\n    sha256: " + strings.Repeat("a", 64) + "\n"
+	assert.Equal(t, want, string(got))
+}

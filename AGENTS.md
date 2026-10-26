@@ -42,6 +42,16 @@
 
 `internal/recipe/catalog_test.go` 的 `TestNoSha256OutsideTrust` 掃全 repo。sha256 值只准出現在 `trust/` 與 `testdata/`，另外豁免 `tests/verified.conf`：那裡存的是配方內容的指紋，不是上游下載的雜湊。把上游雜湊貼進 `tests/verified.conf`，掃描抓不到。
 
+### 上游換檔時跑 `task trust:refresh`
+
+`checksum: {trust: true}` 的配方沒有上游雜湊，雜湊記在 `trust/hashes.yaml`。上游換檔後，`install` 會報「與 trust 記錄不符」，訊息裡已寫出修法。
+
+1. 跑 `task trust:refresh -- <配方>`。它下載最新的檔，併進 `trust/hashes.yaml`，再跑 `task test:recipe`。
+2. 實測失敗時，它把 `trust/hashes.yaml` 還原並 exit 1。這代表新檔有問題，不要硬記。
+3. 成功後看 `git diff trust/hashes.yaml`，確認只有該配方的項目變了，再 commit 並發新 tag。
+
+不要手改 `trust/hashes.yaml` 的 `sha256`：手動貼的值沒有經過實測。
+
 ### podman 預設的 cgroup manager 在某些 session 會壞
 
 症狀是 `crun` 報 sd-bus 錯誤。繞法是指定一份用 `cgroupfs` 的設定檔：

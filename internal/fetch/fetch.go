@@ -63,6 +63,9 @@ type Fetcher struct {
 	// AllowUnverified 只放行「完全沒設雜湊來源」的檔，對應配方的 unverified 與 --allow-unverified。
 	// 有設來源卻驗證失敗的檔照樣擋：作者寫了來源，失敗就代表檔案有問題。
 	AllowUnverified bool
+	// Recipe 是目前處理的配方名，只用來讓 trust 不符的錯誤訊息指出該重驗哪個配方。
+	// 空字串時訊息寫 <配方>，由使用者自己代入。
+	Recipe string
 
 	// fetchRoot 只給測試換掉 TUF 下載；nil 時用 FetchTrustedRoot。
 	fetchRoot func(ctx context.Context, cacheDir string) (root.TrustedMaterial, error)
@@ -134,7 +137,12 @@ func (f *Fetcher) Get(ctx context.Context, a recipe.Artifact, version string) (R
 	if !f.AllowUnverified || hasSource(a.Checksum) {
 		if err := f.verify(ctx, a.Checksum, d, name, sum, size); err != nil {
 			_ = os.Remove(tmp)
-			return Result{}, fmt.Errorf("%s（%s）：%w", a.ID, u, err)
+			err = fmt.Errorf("%s（%s）：%w", a.ID, u, err)
+			if errors.Is(err, ErrTrustMismatch) {
+				// 上游換檔是最常見的原因，直接給出修法，使用者不必翻文件。
+				err = fmt.Errorf("%w\n上游的檔已更新，執行 task trust:refresh -- %s 重新驗證", err, f.recipeHint())
+			}
+			return Result{}, err
 		}
 	}
 	dst := filepath.Join(f.Dir, name)
@@ -143,6 +151,33 @@ func (f *Fetcher) Get(ctx context.Context, a recipe.Artifact, version string) (R
 		return Result{}, fmt.Errorf("fetch: 移到 %s：%w", dst, err)
 	}
 	return Result{ID: a.ID, Path: dst, Version: version, SHA256: hex.EncodeToString(sum)}, nil
+}
+
+func (f *Fetcher) recipeHint() string {
+	if f.Recipe == "" {
+		return "<配方>"
+	}
+	return f.Recipe
+}
+
+// Record 下載 a 並回傳它該寫進 trust/hashes.yaml 的紀錄，不驗證。
+// 給 trust:refresh 用：那時使用者正是要重新決定「現在上游的檔可信」，所以沒有可比對的對象。
+// 下載檔只暫存在 Dir 的 .part 檔，算完就刪，不留下未驗證的檔。
+func (f *Fetcher) Record(ctx context.Context, a recipe.Artifact, version string) (TrustEntry, error) {
+	d := tmplData{Version: version, Arch: f.Arch}
+	if d.Arch == "" {
+		d.Arch = "amd64"
+	}
+	u, err := render("url", a.URL, d)
+	if err != nil {
+		return TrustEntry{}, err
+	}
+	tmp, sum, size, err := f.download(ctx, u)
+	if err != nil {
+		return TrustEntry{}, err
+	}
+	_ = os.Remove(tmp)
+	return TrustEntry{URL: u, Size: size, SHA256: hex.EncodeToString(sum)}, nil
 }
 
 func (f *Fetcher) verify(ctx context.Context, c recipe.ChecksumSpec, d tmplData, name string, sum []byte, size int64) error {

@@ -464,3 +464,30 @@ func TestTrustedRootRetriesAfterError(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, calls)
 }
+
+// 錯誤訊息要直接告訴使用者下一步，不必先去查文件。
+func TestTrustMismatchMessageMentionsRefresh(t *testing.T) {
+	srv := fileServer(t, map[string][]byte{"/tool": payload}, nil)
+	f := newFetcher(t, srv)
+	f.Recipe = "gitkraken"
+	f.Trust = TrustDB{"tool": {URL: srv.URL + "/tool", Size: int64(len(payload)), SHA256: hexSum(other)}}
+	a := recipe.Artifact{ID: "tool", URL: srv.URL + "/tool", Checksum: recipe.ChecksumSpec{Trust: true}}
+	_, err := f.Get(context.Background(), a, "v1")
+	require.ErrorIs(t, err, ErrTrustMismatch)
+	assert.Contains(t, err.Error(), "上游的檔已更新，執行 task trust:refresh -- gitkraken 重新驗證")
+}
+
+// 其他雜湊來源的錯誤不該帶這句：那些來源跟 trust:refresh 無關。
+func TestChecksumMismatchHasNoRefreshHint(t *testing.T) {
+	srv := fileServer(t, map[string][]byte{
+		"/helm.tar.gz":   payload,
+		"/checksums.txt": []byte(fmt.Sprintf("%s  helm.tar.gz\n", hexSum(other))),
+	}, nil)
+	f := newFetcher(t, srv)
+	f.Recipe = "helm"
+	a := recipe.Artifact{ID: "helm", URL: srv.URL + "/helm.tar.gz",
+		Checksum: recipe.ChecksumSpec{File: srv.URL + "/checksums.txt"}}
+	_, err := f.Get(context.Background(), a, "v1")
+	require.ErrorIs(t, err, ErrChecksumMismatch)
+	assert.NotContains(t, err.Error(), "trust:refresh")
+}
