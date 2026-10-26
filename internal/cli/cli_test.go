@@ -456,3 +456,18 @@ func TestNotifySkippedOnFailure(t *testing.T) {
 	assert.Equal(t, 3, code)
 	assert.Zero(t, hit)
 }
+
+func TestUsageErrorHasOneErrorLine(t *testing.T) {
+	code, _, errOut := runCLI(t, "install")
+	assert.Equal(t, 2, code)
+	assert.Equal(t, 1, strings.Count(errOut, "Error:"), errOut)
+	assert.True(t, strings.HasPrefix(errOut, "Error: install 至少要一個配方名稱\n  usage: mksctl <install|check|list|status|update|version> ...\n"), errOut)
+}
+
+func TestFetchWithoutRecipeEnv(t *testing.T) {
+	p := writeRun(t, install.RunFile{Artifacts: map[string]string{"helm/bin": "/x"}})
+	code, out, errOut := runCLI(t, withEnv(map[string]string{"MKSCTL_RUN": p}), "fetch", "bin")
+	assert.Equal(t, 1, code)
+	assert.Empty(t, out)
+	assert.Equal(t, "Error: 缺 MKSCTL_RECIPE（只能在配方內呼叫）\n", errOut)
+}

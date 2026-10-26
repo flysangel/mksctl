@@ -101,6 +101,9 @@ type Options struct {
 	CheckOnly bool
 }
 
+// fetcherHook 只給測試用：讀出 Run 交給 fetcher 的設定，不必真的跑 sigstore 與網路。
+var fetcherHook func(*fetch.Fetcher)
+
 // plan 是一個配方這次要怎麼處理。
 type plan struct {
 	r       recipe.Recipe
@@ -165,9 +168,18 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 	if trustFS == nil {
 		trustFS = deps.FS
 	}
+	tufDir := deps.TUFCacheDir
+	if opt.CheckOnly {
+		// check 承諾不寫任何東西，sigstore 的 TUF 快取也一樣：改放這次的暫存目錄，結束時一起清掉。
+		// 代價是 check 每次都從頭抓 TUF 中繼資料。
+		tufDir = filepath.Join(fetchDir, ".tuf-cache")
+	}
 	fetcher := &fetch.Fetcher{
 		Upstream: up, Trust: trust, Arch: deps.Arch,
-		TrustFS: trustFS, TUFCacheDir: deps.TUFCacheDir, TrustedRoot: deps.TrustedRoot,
+		TrustFS: trustFS, TUFCacheDir: tufDir, TrustedRoot: deps.TrustedRoot,
+	}
+	if fetcherHook != nil {
+		fetcherHook(fetcher)
 	}
 	plans, artifacts, diffs, err := fetchAll(ctx, fetcher, up, st, recipes, fetchDir, opt.AllowUnverified)
 	if err != nil {

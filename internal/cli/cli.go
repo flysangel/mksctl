@@ -51,7 +51,8 @@ const (
 // TokenPath 是 GitHub token 相對 sysroot 的路徑。
 const TokenPath = "etc/mksctl/github-token"
 
-const usageText = `Error: usage: mksctl <install|check|list|status|update|version> ...
+// usageBody 是用法說明，不含前綴。依情境當首行訊息或縮排在 Error: 下方的 body。
+const usageBody = `usage: mksctl <install|check|list|status|update|version> ...
   install <名稱>... [--set KEY=VALUE]... [--allow-unverified]
   check <名稱>... [--set KEY=VALUE]... [--allow-unverified]
   list [--platform <層>] [--all]
@@ -59,6 +60,20 @@ const usageText = `Error: usage: mksctl <install|check|list|status|update|versio
   update [--tag vX.Y.Z]
   version
 `
+
+// usageText 是沒有子命令或子命令不認得時的整段輸出：用法本身就是那則錯誤訊息。
+const usageText = "Error: " + usageBody
+
+// indent 在每行前加兩格。多行訊息只有首行帶前綴，其餘當 body 縮排。
+func indent(s string) string {
+	lines := strings.SplitAfter(s, "\n")
+	for i, l := range lines {
+		if l != "" {
+			lines[i] = "  " + l
+		}
+	}
+	return strings.Join(lines, "")
+}
 
 // env 收齊所有對外部世界的依賴。測試換掉它，就不需要真的 root、終端機或網路。
 type env struct {
@@ -150,7 +165,7 @@ func run(e env, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "update":
 		err = cmdUpdate(e)
 	case "-h", "--help", "help":
-		fmt.Fprint(stdout, strings.TrimPrefix(usageText, "Error: "))
+		fmt.Fprint(stdout, usageBody)
 		return exitOK
 	default:
 		fmt.Fprint(stderr, usageText)
@@ -164,7 +179,7 @@ func run(e env, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stderr, "Error: %s\n", ee.msg)
 			}
 			if ee.code == exitUsage {
-				fmt.Fprint(stderr, usageText)
+				fmt.Fprint(stderr, indent(usageBody))
 			}
 			return ee.code
 		}
@@ -468,6 +483,10 @@ func cmdFetch(e env, args []string, stdout io.Writer) error {
 		return err
 	}
 	name := e.getenv("MKSCTL_RECIPE")
+	if name == "" {
+		// 沒有配方名就查不到鍵，與其回報「沒有 artifact」誤導使用者，不如直接說缺什麼。
+		return errors.New("缺 MKSCTL_RECIPE（只能在配方內呼叫）")
+	}
 	// 鍵含配方名：配方只拿得到自己宣告的 artifact，不會誤用別的配方同名的檔。
 	p, ok := rf.Artifacts[name+"/"+args[0]]
 	if !ok {

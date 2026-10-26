@@ -18,6 +18,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/flysangel/mksctl/internal/fetch"
 	"github.com/flysangel/mksctl/internal/platform"
 	"github.com/flysangel/mksctl/internal/preflight"
 	"github.com/flysangel/mksctl/internal/recipe"
@@ -524,4 +525,38 @@ func TestCheckOnlyReportsAptConflict(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"docker/apt-source-conflict"}, kinds(diffs))
 	assert.Empty(t, fx.Runner.calls)
+}
+
+func TestCheckOnlyTUFCacheOutsideSysroot(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	fx.Deps.FetchDir = ""
+	fx.Deps.TUFCacheDir = filepath.Join(fx.Sysroot, "var/cache/mksctl/tuf")
+	var got string
+	fetcherHook = func(f *fetch.Fetcher) {
+		got = f.TUFCacheDir
+		// 模擬 sigstore 寫快取，證明這個目錄結束後會一起清掉。
+		require.NoError(t, os.MkdirAll(got, 0o755))
+	}
+	t.Cleanup(func() { fetcherHook = nil })
+
+	diffs, err := Run(ctx, fx.Deps, Options{Names: []string{"helm"}, CheckOnly: true})
+	require.NoError(t, err)
+	assert.Empty(t, diffs)
+	require.NotEmpty(t, got)
+	rel, err := filepath.Rel(fx.Sysroot, got)
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(rel, ".."), "TUF 快取不能在 sysroot 底下：%s", got)
+	assert.NoDirExists(t, got)
+	assert.NoDirExists(t, fx.Deps.TUFCacheDir)
+}
+
+func TestInstallKeepsConfiguredTUFCache(t *testing.T) {
+	fx := fakeDeps(t, ubuntu2404)
+	fx.Deps.TUFCacheDir = filepath.Join(fx.Sysroot, "var/cache/mksctl/tuf")
+	var got string
+	fetcherHook = func(f *fetch.Fetcher) { got = f.TUFCacheDir }
+	t.Cleanup(func() { fetcherHook = nil })
+	_, err := Run(ctx, fx.Deps, Options{Names: []string{"helm"}})
+	require.NoError(t, err)
+	assert.Equal(t, fx.Deps.TUFCacheDir, got)
 }
