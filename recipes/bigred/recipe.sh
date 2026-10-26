@@ -19,7 +19,7 @@ _bigred_create_ubuntu() {
 }
 
 bigred_install() {
-  local admin_group occupant
+  local admin_group occupant existing_uid
 
   pkg_install sudo bash || return 1
 
@@ -33,8 +33,12 @@ bigred_install() {
   esac
 
   if id -u "${_BIGRED_USER}" >/dev/null 2>&1; then
-    # 帳號已存在：沿用現有 UID，不重建
-    echo "Info: 帳號 ${_BIGRED_USER} 已存在（UID=$(id -u "${_BIGRED_USER}")），沿用現有 UID" >&2
+    # 帳號已存在：UID 與預期相同才算已完成；不同就停止，不動別人的檔案歸屬
+    existing_uid="$(id -u "${_BIGRED_USER}")" || return 1
+    if [[ "${existing_uid}" != "${_BIGRED_UID}" ]]; then
+      echo "Error: 帳號 ${_BIGRED_USER} 已存在，UID 是 ${existing_uid}，預期 ${_BIGRED_UID}" >&2
+      return 1
+    fi
   else
     # UID 被別的帳號占用時停止，避免搶走別人的 UID 造成檔案歸屬錯亂
     if occupant="$(getent passwd "${_BIGRED_UID}")"; then

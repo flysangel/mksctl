@@ -67,13 +67,7 @@ sshenv_install() {
     ;;
   esac
 
-  # ubuntu 的 openssh-server 套件相依 openssh-client，所以只裝 server。
-  # 不經 pkgmap 的 openssh-client：它對到 apt 的 ssh，那在 24.04 是虛擬套件，跟 server 一起裝會找不到候選。
-  # alpine 的 openssh-server 不一定帶客戶端，要另外裝。
-  pkg_install openssh-server || return 1
-  if [[ "${OS_ID}" == "alpine" ]]; then
-    pkg_install openssh-client || return 1
-  fi
+  pkg_install openssh-server openssh-client || return 1
 
   # 客戶端自動信任主機金鑰；附加在檔尾，會落在預設 ssh_config 的 Host * 區塊內，故沿用縮排
   _sshenv_append /etc/ssh/ssh_config '    StrictHostKeyChecking no' || return 1
@@ -94,6 +88,8 @@ sshenv_install() {
   for home in /home/*; do
     [[ -d "${home}" ]] || continue
     user="$(basename "${home}")"
+    # /home 底下可能有不屬於任何帳號的孤兒目錄，跳過
+    id -u "${user}" >/dev/null 2>&1 || continue
     _sshenv_user_keys "${user}" "${home}" || return 1
   done
 

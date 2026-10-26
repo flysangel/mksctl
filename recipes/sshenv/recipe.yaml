@@ -1,3 +1,4 @@
 venue: vm
 packages:
   - openssh-server
+  - openssh-client
