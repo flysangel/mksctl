@@ -12,16 +12,16 @@ pkg_install() {
   }
   names="$("${MKSCTL_BIN}" pkgname "$@")" || return 1
   # 套件名以空白分隔，要拆成多個參數
-  read -r -a pkgs <<<"${names}"
-  apk add --no-cache "${pkgs[@]}"
+  read -r -a pkgs <<<"${names}" || return 1
+  apk add --no-cache "${pkgs[@]}" || return 1
 }
 
 # _svc_enable <服務> — openrc 開機啟用
 _svc_enable() {
-  rc-update add "$1" default
+  rc-update add "$1" default || return 1
 }
 
 # _svc_start <服務> — openrc 立即啟動
 _svc_start() {
-  rc-service "$1" start
+  rc-service "$1" start || return 1
 }

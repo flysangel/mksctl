@@ -14,7 +14,7 @@ _helm_extract_install() {
     echo "Error: tarball 內找不到唯一的 linux-*/helm" >&2
     return 1
   }
-  install_bin "${found[0]}" helm
+  install_bin "${found[0]}" helm || return 1
 }
 
 helm_install() {

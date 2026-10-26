@@ -140,3 +140,26 @@ func TestCommonFetchCallsBin(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "fetch helm\n", out.String())
 }
+
+// 呼叫端把函式放在 || 左側時，bash 會關掉 set -e；install_bin 必須自己 return 1。
+func TestInstallBinFailsUnderOrContext(t *testing.T) {
+	body := "step() { install_bin \"$1\" foo || return 1; echo AFTER; }\n" +
+		"demo_install() { local rc=0; step \"${SRC}\" || rc=$?; echo \"rc=${rc}\"; return \"${rc}\"; }\n" +
+		"demo_verify() { :; }\n"
+	dir := t.TempDir()
+	good := dir + "/good"
+	require.NoError(t, os.WriteFile(good, []byte("x"), 0o644))
+
+	cases := map[string]map[string]string{
+		"來源不存在":   {"SRC": dir + "/missing", "MKSCTL_BIN_DIR": dir},
+		"目標目錄不存在": {"SRC": good, "MKSCTL_BIN_DIR": dir + "/nodir"},
+	}
+	for name, env := range cases {
+		t.Run(name, func(t *testing.T) {
+			out, _, err := run(t, demoFS(t, body), []string{"common"}, "demo", env)
+			require.Error(t, err)
+			assert.Contains(t, out, "rc=1")
+			assert.NotContains(t, out, "AFTER")
+		})
+	}
+}
