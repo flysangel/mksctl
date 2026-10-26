@@ -1,40 +1,20 @@
 # 桌面環境 xfce：xfce4 加 xrdp，遠端桌面用。只有 ubuntu 提供 desktop 能力，alpine 自動略過。
-# 舊版反串 aconfig；現在用 needs 先跑整條 aconfig 鏈。
-# params 的預設值是方便值（desktop／desktop520），已知限制；要換就在安裝時用 --set 帶入。
+# 帳號、xrdp 與輸入法設定在 xrdp 配方，params 也在那裡；本配方 needs xrdp。
 # Mozilla 官方 apt 來源提供 firefox .deb，避開 ubuntu 的 snap 版。
 # apt_sources 目前沒有 pin 欄位，所以 Pin-Priority 1000 的 pin 檔由 recipe.sh 在 pkg_install firefox 前自己寫。
 # 金鑰存 .asc（armored），與舊腳本同一路徑，Mozilla 公布的就是 armored 格式。
 venue: vm
 needs:
-  - aconfig
+  - xrdp
 requires:
   - apt
   - desktop
-params:
-  - XRDP_USER
-  - XRDP_PASSWD
 packages:
-  - xserver-xorg
-  - xserver-xorg-legacy
-  - xorgxrdp
   - xfce4
-  - xinit
   - xfce4-goodies
   - firefox
   - mousepad
   - xfce4-terminal
-  - xrdp
-  - xtightvncviewer
-  - dbus-x11
-  - fcitx5
-  - fcitx5-chewing
-  - fcitx5-chinese-addons
-  - numlockx
-  - fonts-wqy-zenhei
-  - language-pack-zh-hant
-  - language-pack-gnome-zh-hant
-  - zenity
-  - xterm
 apt_sources:
   - file: mozilla.sources
     uris: https://packages.mozilla.org/apt

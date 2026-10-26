@@ -1,0 +1,32 @@
+# xrdp：遠端桌面的共用底層，給 xfce 與 lxqt 用（兩者 needs 本配方）。
+# 放帳號、三個 xrdp 修補、fcitx5 使用者設定、xrdp 套件與服務。桌面本身由 xfce、lxqt 裝。
+# 舊版反串 aconfig；現在用 needs 先跑整條 aconfig 鏈。
+# params 只放在這裡。--set XRDP_USER=… 由 install 依各配方宣告的 params 分給每個要跑的配方，
+# 所以 mksctl install xfce --set XRDP_USER=bob 會傳到被 needs 拉進來的本配方。
+# 預設值是方便值（desktop／desktop520），已知限制。
+venue: vm
+needs:
+  - aconfig
+requires:
+  - apt
+  - desktop
+params:
+  - XRDP_USER
+  - XRDP_PASSWD
+packages:
+  - xserver-xorg
+  - xserver-xorg-legacy
+  - xorgxrdp
+  - xinit
+  - xrdp
+  - xtightvncviewer
+  - dbus-x11
+  - fcitx5
+  - fcitx5-chewing
+  - fcitx5-chinese-addons
+  - numlockx
+  - fonts-wqy-zenhei
+  - language-pack-zh-hant
+  - language-pack-gnome-zh-hant
+  - zenity
+  - xterm
