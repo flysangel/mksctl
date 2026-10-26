@@ -1,0 +1,10 @@
+venue: podman
+latest:
+  url: https://dl.k8s.io/release/stable.txt
+packages:
+  - bash-completion
+artifacts:
+  - id: kubectl
+    url: https://dl.k8s.io/release/{{.Version}}/bin/linux/{{.Arch}}/kubectl
+    checksum:
+      file: "{{.URL}}.sha256"

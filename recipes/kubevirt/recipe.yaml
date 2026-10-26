@@ -1,0 +1,9 @@
+venue: podman
+latest:
+  github: kubevirt/kubevirt
+artifacts:
+  - id: virtctl
+    url: https://github.com/kubevirt/kubevirt/releases/download/{{.Version}}/virtctl-{{.Version}}-linux-{{.Arch}}
+    checksum:
+      # 上游只對 git tag 做 GPG 簽章，資產沒有 checksum 檔；改用 GitHub 公布的資產 digest
+      github_digest: true

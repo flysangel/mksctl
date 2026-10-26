@@ -1,0 +1,9 @@
+venue: podman
+latest:
+  github: hadolint/hadolint
+artifacts:
+  - id: hadolint
+    url: https://github.com/hadolint/hadolint/releases/download/{{.Version}}/hadolint-linux-x86_64
+    checksum:
+      # 上游沒有逐檔的 .sha256，只有整個 release 一份 checksums.sha256
+      file: https://github.com/hadolint/hadolint/releases/download/{{.Version}}/checksums.sha256
