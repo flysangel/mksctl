@@ -2,7 +2,7 @@
 # recipe.sh — sudopw 配方：鎖定 root 密碼，管理員群組免密碼 sudo
 # 註記：函式庫不設 set 旗標，set -e 由 runner 組合腳本統一開啟
 #       本配方沒有 latest，每次安裝都會執行，所以每一步都要能重跑
-#       needs bigred：舊版靠 aconfig 的執行順序才有 sudo 與管理員群組，這裡寫明
+#       sudopw 不依賴 bigred；bigred 把帳號加進 wheel 或 sudo 群組，順序由 aconfig 的 steps 保證
 #       免密規則寫成 /etc/sudoers.d 底下的獨立檔，不依賴 /etc/sudoers 的既有內容：
 #       alpine cloud image 的 /etc/sudoers 沒有 %wheel 那一行，改檔會空轉
 
@@ -21,6 +21,14 @@ _sudopw_group() {
 sudopw_install() {
   local group
   group="$(_sudopw_group)" || return 1
+
+  pkg_install sudo || return 1
+
+  # alpine 的 wheel 群組由 base 映像提供；沒有的話，免密規則會對不到任何人
+  if [[ "${OS_ID}" == alpine ]] && ! getent group wheel >/dev/null; then
+    echo "Error: 群組 wheel 不存在，無法設定免密 sudo" >&2
+    return 1
+  fi
 
   # 清除並鎖定 root 密碼，禁止以 root 密碼登入
   passwd -dl root || return 1
