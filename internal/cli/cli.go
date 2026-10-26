@@ -40,6 +40,7 @@ import (
 	"github.com/flysangel/mksctl/internal/selfupdate"
 	"github.com/flysangel/mksctl/internal/state"
 	"github.com/flysangel/mksctl/internal/upstream"
+	"github.com/flysangel/mksctl/internal/winreg"
 )
 
 // Version 由建置時的 -ldflags "-X github.com/flysangel/mksctl/internal/cli.Version=<tag>" 寫入。
@@ -55,9 +56,10 @@ const (
 )
 
 // usageBody 是用法說明，不含前綴。依情境當首行訊息或縮排在 Error: 下方的 body。
-const usageBody = `usage: mksctl <install|check|list|status|update|version> ...
+const usageBody = `usage: mksctl <install|check|restore|list|status|update|version> ...
   install <名稱>... [--set KEY=VALUE]... [--allow-unverified]
   check <名稱>... [--set KEY=VALUE]... [--allow-unverified]
+  restore <名稱>... [--set KEY=VALUE]... [--allow-unverified]
   list [--platform <層>] [--all]
   status
   update [--tag vX.Y.Z]
@@ -101,6 +103,8 @@ type env struct {
 	identity func() identity.Identity                // nil 用 identity.Current
 	detect   func(string) (platform.Platform, error) // nil 用 platform.Detect
 	openFile func(string) (*os.File, error)          // nil 用 os.Open；cli 讀機器上的檔都走它
+	// registry 為 nil 時由 install 用 winreg.Default()。
+	registry winreg.Store
 }
 
 func (e env) targetOS() string {
@@ -180,7 +184,7 @@ func run(e env, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var err error
 	notify := false
 	switch sub {
-	case "install", "check":
+	case "install", "check", "restore":
 		err = cmdInstall(ctx, e, sub, rest, stdin, stdout, stderr)
 		notify = true
 	case "list":
@@ -338,6 +342,7 @@ func cmdInstall(ctx context.Context, e env, sub string, args []string, stdin io.
 	}
 
 	checkOnly := sub == "check"
+	restore := sub == "restore"
 	if checkOnly {
 		fmt.Fprintln(stdout, "Info: 套件名稱要在寫入套件來源後才能檢查，check 不含這一項")
 	}
@@ -351,16 +356,24 @@ func cmdInstall(ctx context.Context, e env, sub string, args []string, stdin io.
 		r = &runner.Runner{FS: e.fsys, Bin: bin, Stdout: stdout, Stderr: stderr}
 		psr = &runner.PSRunner{FS: e.fsys, Bin: bin, Stdout: stdout, Stderr: stderr}
 	}
+	// 身分只取一次：路徑（暫存放哪裡）與安裝前檢查要看同一份。
+	id := e.currentIdentity()
+	ps := paths.For(e.targetOS(), e.sysroot, id, e.getenv)
 	deps := install.Deps{
 		FS: e.fsys, TrustFS: e.fsys, Sysroot: e.sysroot,
 		HTTP: e.http, GitHubBase: e.githubBase, GitHubAPIBase: e.apiBase, TokenFunc: e.readToken,
 		Index: e.index, Runner: r, PSRunner: psr, Now: e.now, Stdout: stdout,
-		TUFCacheDir: e.paths().TUFCache,
-		GOOS:        e.targetOS(), Identity: e.currentIdentity(), Detect: e.detect,
+		TUFCacheDir: ps.TUFCache, Paths: ps, Registry: e.registry,
+		GOOS: e.targetOS(), Identity: id, Detect: e.detect,
 	}
-	diffs, err := install.Run(ctx, deps, install.Options{
+	opt := install.Options{
 		Names: names, Params: params, AllowUnverified: *allow, Sysroot: e.sysroot, CheckOnly: checkOnly,
-	})
+	}
+	run := install.Run
+	if restore {
+		run = install.Restore
+	}
+	diffs, err := run(ctx, deps, opt)
 	if err != nil {
 		return err
 	}
@@ -368,9 +381,12 @@ func cmdInstall(ctx context.Context, e env, sub string, args []string, stdin io.
 		writeDifferences(stderr, diffs)
 		return &exitErr{code: exitDiffs}
 	}
-	if checkOnly {
+	switch {
+	case checkOnly:
 		fmt.Fprintf(stdout, "Success: 檢查通過：%s\n", strings.Join(names, "、"))
-	} else {
+	case restore:
+		fmt.Fprintf(stdout, "Success: 還原完成：%s\n", strings.Join(names, "、"))
+	default:
 		fmt.Fprintf(stdout, "Success: 安裝完成：%s\n", strings.Join(names, "、"))
 	}
 	return nil

@@ -24,6 +24,7 @@ import (
 	"github.com/flysangel/mksctl/internal/recipe"
 	"github.com/flysangel/mksctl/internal/runner"
 	"github.com/flysangel/mksctl/internal/state"
+	"github.com/flysangel/mksctl/internal/winreg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -162,7 +163,7 @@ func TestNotRootFailsFirst(t *testing.T) {
 }
 
 func TestNotRootCheckedBeforeReadingFiles(t *testing.T) {
-	for _, sub := range []string{"install", "check", "update"} {
+	for _, sub := range []string{"install", "check", "update", "restore"} {
 		h := newHarness(t, withUID(1000))
 		h.env.sysroot = filepath.Join(t.TempDir(), "不存在")
 		code, _, errOut := h.run(sub, "helm")
@@ -180,6 +181,8 @@ var winFS = map[string]string{
 	"trust/hashes.yaml":             "{}\n",
 	"recipes/explorerview/recipe.yaml": "venue: vm\nrequires: [windows]\nscope: user\nregistry:\n" +
 		"  - key: HKCU\\Software\\X\n    name: A\n    type: dword\n    value: 1\n    restore: delete\n",
+	"recipes/machreg/recipe.yaml": "venue: vm\nrequires: [windows]\nregistry:\n" +
+		"  - key: HKLM\\Software\\X\n    name: M\n    type: dword\n    value: 1\n    restore: delete\n",
 }
 
 func TestWindowsIdentityReadsNoMachineFile(t *testing.T) {
@@ -190,18 +193,85 @@ func TestWindowsIdentityReadsNoMachineFile(t *testing.T) {
 	h.env.geteuid = func() int { return -1 } // Windows 的 os.Geteuid 回 -1，不能拿來判斷。
 	h.env.identity = func() identity.Identity { return identity.Identity{Elevated: true, System: true} }
 	h.env.detect = func(string) (platform.Platform, error) { return platform.WindowsPlatform("Client", "26100"), nil }
+	// 狀態檔、鎖檔與暫存都落在 win 底下；身分檢查擋下後，這個目錄必須還是空的。
+	win := t.TempDir()
 	h.env.getenv = func(k string) string {
-		return map[string]string{"ProgramData": `C:\ProgramData`, "LOCALAPPDATA": `C:\L`}[k]
+		return map[string]string{"ProgramData": filepath.Join(win, "PD"), "LOCALAPPDATA": filepath.Join(win, "L")}[k]
 	}
 	h.env.openFile = func(name string) (*os.File, error) {
 		opened = append(opened, name)
 		return os.Open(name)
 	}
-	code, _, errOut := h.run("install", "explorerview")
-	assert.Equal(t, 3, code, errOut)
-	assert.Contains(t, errOut, "system-user-scope")
-	assert.Contains(t, errOut, "explorerview")
-	assert.Empty(t, opened, "身分檢查前不該開任何機器上的檔")
+	for _, sub := range []string{"install", "restore"} {
+		code, _, errOut := h.run(sub, "explorerview")
+		assert.Equal(t, 3, code, errOut)
+		assert.Contains(t, errOut, "system-user-scope")
+		assert.Contains(t, errOut, "explorerview")
+		assert.Empty(t, opened, "身分檢查前不該開任何機器上的檔")
+		assert.NoDirExists(t, h.env.sysroot)
+		ents, err := os.ReadDir(win)
+		require.NoError(t, err)
+		assert.Empty(t, ents, "%s：身分檢查前不該建鎖檔、狀態檔或暫存目錄", sub)
+	}
+}
+
+// Windows 的 machine 配方把狀態檔寫到 ProgramData，不寫 sysroot。
+func TestWindowsInstallWritesProgramDataState(t *testing.T) {
+	h := newHarness(t, withFS(winFS))
+	h.env.goos = "windows"
+	h.env.sysroot = filepath.Join(t.TempDir(), "不存在")
+	h.env.identity = func() identity.Identity { return identity.Identity{Elevated: true} }
+	h.env.detect = func(string) (platform.Platform, error) { return platform.WindowsPlatform("Client", "26100"), nil }
+	h.env.registry = winreg.NewMemStore()
+	win := t.TempDir()
+	pd := filepath.Join(win, "PD")
+	h.env.getenv = func(k string) string {
+		return map[string]string{"ProgramData": pd, "LOCALAPPDATA": filepath.Join(win, "L")}[k]
+	}
+
+	code, out, errOut := h.run("install", "machreg")
+	require.Equal(t, 0, code, errOut)
+	assert.Contains(t, out, "Success: 安裝完成：machreg")
+	// Linux 上 Windows 路徑的反斜線只是檔名的一部分，整串就是檔案路徑。
+	st, err := state.Load(pd + `\mksctl\state.json`)
+	require.NoError(t, err)
+	assert.Contains(t, st.Recipes, "machreg")
+	assert.NoDirExists(t, h.env.sysroot)
+
+	code, out, errOut = h.run("restore", "machreg")
+	require.Equal(t, 0, code, errOut)
+	assert.Contains(t, out, "Success: 還原完成：machreg")
+	st, err = state.Load(pd + `\mksctl\state.json`)
+	require.NoError(t, err)
+	assert.NotContains(t, st.Recipes, "machreg")
+}
+
+func TestRestoreSubcommand(t *testing.T) {
+	fsMap := map[string]string{}
+	for k, v := range defaultFS {
+		fsMap[k] = v
+	}
+	fsMap["recipes/helm/recipe.sh"] = "helm_install() { :; }\nhelm_verify() { :; }\nhelm_restore() { :; }\n"
+	fsMap["recipes/xfce/recipe.sh"] = "xfce_install() { :; }\nxfce_verify() { :; }\nxfce_restore() { :; }\n"
+	h := newHarness(t, withFS(fsMap))
+	code, out, errOut := h.run("restore", "helm", "xfce", "--set", "XRDP_USER=bob")
+	require.Equal(t, 0, code, errOut)
+	assert.Contains(t, out, "Success: 還原完成：helm、xfce\n")
+	assert.Equal(t, []string{"xfce", "helm"}, h.runner.calls, "反序還原")
+	assert.Equal(t, "bob", h.runner.envs["xfce"]["MKSCTL_PARAM_XRDP_USER"])
+}
+
+func TestRestoreUnsupportedIsError(t *testing.T) {
+	code, _, errOut := runCLI(t, "restore", "helm")
+	assert.Equal(t, 1, code)
+	assert.Contains(t, errOut, "Error: 配方 helm 不支援 restore")
+}
+
+func TestRestoreUsage(t *testing.T) {
+	code, _, errOut := runCLI(t, "restore")
+	assert.Equal(t, 2, code)
+	assert.Contains(t, errOut, "Error: restore 至少要一個配方名稱")
+	assert.Contains(t, errOut, "restore <名稱>...")
 }
 
 func TestSetStdinFromTerminalFails(t *testing.T) {
@@ -344,7 +414,7 @@ func TestCheckDifferencesExit3(t *testing.T) {
 func TestUsageExit2(t *testing.T) {
 	code, _, errOut := runCLI(t)
 	assert.Equal(t, 2, code)
-	assert.Contains(t, errOut, "Error: usage: mksctl <install|check|list|status|update|version> ...")
+	assert.Contains(t, errOut, "Error: usage: mksctl <install|check|restore|list|status|update|version> ...")
 	code, _, _ = runCLI(t, "bogus")
 	assert.Equal(t, 2, code)
 }
@@ -596,7 +666,7 @@ func TestUsageErrorHasOneErrorLine(t *testing.T) {
 	code, _, errOut := runCLI(t, "install")
 	assert.Equal(t, 2, code)
 	assert.Equal(t, 1, strings.Count(errOut, "Error:"), errOut)
-	assert.True(t, strings.HasPrefix(errOut, "Error: install 至少要一個配方名稱\n  usage: mksctl <install|check|list|status|update|version> ...\n"), errOut)
+	assert.True(t, strings.HasPrefix(errOut, "Error: install 至少要一個配方名稱\n  usage: mksctl <install|check|restore|list|status|update|version> ...\n"), errOut)
 }
 
 func TestFetchWithoutRecipeEnv(t *testing.T) {
