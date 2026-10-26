@@ -457,7 +457,7 @@ func prepareFetchDir(dir, base string, checkOnly bool) (string, func(), error) {
 	}
 	if dir == "" {
 		if err := os.MkdirAll(base, 0o755); err != nil {
-			return "", nil, err
+			return "", nil, fmt.Errorf("建立下載暫存根目錄 %s：%w", base, err)
 		}
 		d, err := os.MkdirTemp(base, "run-*")
 		if err != nil {

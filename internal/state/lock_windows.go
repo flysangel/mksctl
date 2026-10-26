@@ -22,7 +22,7 @@ const lockPollInterval = 100 * time.Millisecond
 func Lock(ctx context.Context, path string, wait time.Duration) (unlock func(), err error) {
 	lockPath := path + ".lock"
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("建立鎖檔目錄 %s：%w", filepath.Dir(lockPath), err)
 	}
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {

@@ -76,7 +76,7 @@ func Load(path string) (File, error) {
 func (f File) Save(path string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return fmt.Errorf("建立狀態檔目錄 %s：%w", dir, err)
 	}
 	// 統一存 UTC，不同時區的機器寫出的檔才一致。
 	rs := make(map[string]Entry, len(f.Recipes))

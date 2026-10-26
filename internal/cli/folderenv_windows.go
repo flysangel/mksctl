@@ -25,9 +25,23 @@ func folderEnv(getenv func(string) string) func(string) string {
 		default:
 			return getenv(key)
 		}
-		if p, err := windows.KnownFolderPath(id, 0); err == nil && p != "" {
+		if p, err := tokenKnownFolder(id); err == nil && p != "" {
 			return p
 		}
 		return getenv(key)
 	}
+}
+
+// tokenKnownFolder 帶目前行程的 token 查 Known Folder。
+// hToken 為 NULL 時，Shell 用行程的環境區塊展開 User Shell Folders 裡的 %USERPROFILE%，
+// 而 USERPROFILE 同樣是繼承來的；帶 token 才改由 ExpandEnvironmentStringsForUser 展開。
+func tokenKnownFolder(id *windows.KNOWNFOLDERID) (string, error) {
+	var t windows.Token
+	err := windows.OpenProcessToken(windows.CurrentProcess(),
+		windows.TOKEN_QUERY|windows.TOKEN_IMPERSONATE|windows.TOKEN_DUPLICATE, &t)
+	if err != nil {
+		return "", err
+	}
+	defer t.Close()
+	return t.KnownFolderPath(id, 0)
 }
