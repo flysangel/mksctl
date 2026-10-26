@@ -1,0 +1,5 @@
+# 腳本與原始碼強制 LF：CRLF 會讓 bash 與 go 工具報錯
+*.sh text eol=lf
+*.go text eol=lf
+*.yaml text eol=lf
+*.py text eol=lf

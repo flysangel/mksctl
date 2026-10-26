@@ -1,0 +1,9 @@
+provides:
+  - apk
+  - openrc
+  - time-sync
+# 版本相關的 community 在各版本層（例如 alpine-3.24.yaml）；edge 與版本無關，放這裡
+# 風險：edge 是普通附加的套件庫，不 pin；apk add 會取最高版本，所以套件可能來自 edge 而非穩定版
+repositories:
+  - https://dl-cdn.alpinelinux.org/alpine/edge/main
+  - https://dl-cdn.alpinelinux.org/alpine/edge/community

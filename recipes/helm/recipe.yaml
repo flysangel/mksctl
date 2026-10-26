@@ -1,0 +1,8 @@
+venue: podman
+latest:
+  url: https://get.helm.sh/helm-latest-version
+artifacts:
+  - id: helm
+    url: https://get.helm.sh/helm-{{.Version}}-linux-{{.Arch}}.tar.gz
+    checksum:
+      file: "{{.URL}}.sha256sum"

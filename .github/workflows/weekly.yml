@@ -1,0 +1,21 @@
+name: weekly
+on:
+  schedule:
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  podman:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-harness
+        with:
+          venue: podman
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: 實測 podman 層的全部配方
+        env:
+          MKSCTL_TEST_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash bin/smoke-venue.sh podman

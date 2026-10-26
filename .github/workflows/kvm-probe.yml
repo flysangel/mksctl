@@ -1,0 +1,47 @@
+name: kvm-probe
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/kvm-probe.yml'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 檢查 /dev/kvm 與 CPU 虛擬化旗標
+        run: |
+          ls -l /dev/kvm || echo "FINDING: /dev/kvm 不存在"
+          echo "cpu vmx/svm count: $(grep -cE '(vmx|svm)' /proc/cpuinfo || true)"
+      - name: 開放 /dev/kvm 權限
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+          ls -l /dev/kvm || true
+      - name: 安裝 qemu
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
+        run: |
+          sudo -E apt-get update
+          sudo -E apt-get install -y --no-install-recommends qemu-system-x86
+      - name: 用 KVM 開機
+        run: |
+          sudo chmod a+r /boot/vmlinuz-"$(uname -r)"
+          set +e
+          timeout 120 qemu-system-x86_64 -enable-kvm -cpu host -machine q35 -m 512 -nographic \
+            -kernel /boot/vmlinuz-"$(uname -r)" \
+            -append 'console=ttyS0 panic=-1' -no-reboot > serial.log 2> qemu.err
+          echo "qemu exit: $?"
+          echo "--- qemu stderr ---"; cat qemu.err
+          echo "--- serial (head) ---"; head -40 serial.log
+          if grep -q 'Linux version' serial.log; then
+            echo "FINDING: qemu 用 KVM 開機成功"
+            grep -i kvm serial.log | head -5 || true
+          elif grep -qiE 'kvm|accel' qemu.err; then
+            echo "FINDING: KVM 加速不可用"
+          else
+            echo "FINDING: 未開機，原因不明"
+          fi
+          exit 0

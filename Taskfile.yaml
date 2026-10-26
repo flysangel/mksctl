@@ -1,0 +1,86 @@
+version: "3"
+
+set: [errexit, nounset, pipefail]
+
+tasks:
+  default:
+    cmds:
+      - task --list-all
+    silent: true
+
+  doctor:
+    desc: "[開發] 檢查執行環境：命令存在與種類、core.hooksPath、pre-push 執行位元，不安裝"
+    cmds:
+      - bash bin/doctor.sh
+
+  lint:
+    desc: "[開發] 離線靜態檢查全部（文件檢查加程式檢查，內容看 lint:docs 與 lint:code）"
+    cmds:
+      - task: lint:docs
+      - task: lint:code
+
+  lint:docs:
+    desc: "[開發] 離線文件檢查（四大文件、Taskfile）。文件引用個人規則檔，只在本機跑"
+    cmds:
+      - python3 bin/check-docs.py
+      - python3 bin/check-taskfile.py
+
+  lint:code:
+    desc: "[開發] 離線程式檢查（go vet、Windows 建置、shellcheck、shfmt）。CI 跑這個"
+    cmds:
+      - go vet ./...
+      - GOOS=windows go build ./...
+      - |
+        # 目錄可能還沒建，只掃存在的
+        dirs=()
+        for d in bin tests platforms recipes; do
+          if [[ -d "${d}" ]]; then
+            dirs+=("${d}")
+          fi
+        done
+        if (( ${#dirs[@]} == 0 )); then
+          echo "Info: 沒有可掃的 shell 目錄"
+          exit 0
+        fi
+        find "${dirs[@]}" -name '*.sh' -type f -exec shellcheck -S warning {} +
+        shfmt -d -i 2 "${dirs[@]}"
+
+  test:
+    desc: "[開發] 離線單元測試"
+    cmds:
+      - go test ./...
+      - bash tests/test_install.sh
+      - bash tests/test_check_verified.sh
+
+  check:verified:
+    desc: "[開發] 查 lxc 與 vm 配方的已驗紀錄是否齊全、雜湊相符、7 天內（本機工具，發版 workflow 不用）"
+    cmds:
+      - task: build
+      - bash bin/check-verified.sh
+
+  build:
+    desc: "[開發] 建置靜態執行檔到 dist/mksctl（發版用 task build VERSION=<tag> 寫入版本）"
+    cmds:
+      - CGO_ENABLED=0 go build -ldflags "-X github.com/flysangel/mksctl/internal/cli.Version={{.VERSION | default "dev"}}" -o dist/mksctl ./cmd/mksctl
+
+  test:recipe:
+    desc: "[開發] 在配方宣告的場地（podman、lxc、vm）實測一個配方（用法：task test:recipe -- <配方>）"
+    summary: |
+      先 task build，再依 mksctl list --all 查到的 venue，對 tests/platforms.conf 的每個平台
+      各開一台測試機，連跑兩次 mksctl install。lxc 與 vm 層通過後更新 tests/verified.conf。
+      vm 層需要 /dev/kvm 的存取權；剛加入 kvm 群組還沒重登時，改跑 sg kvm -c 'task test:recipe -- <配方>'。
+    preconditions:
+      - { sh: "[[ -n '{{.CLI_ARGS | default \"\"}}' ]]", msg: "用法：task test:recipe -- <配方>（未提供配方）" }
+    cmds:
+      - task: build
+      - |
+        venue="$(dist/mksctl list --all | awk -v n='{{.CLI_ARGS}}' '$1 == n { print $2 }')"
+        case "${venue}" in
+        podman) exec bash tests/test_pkg.sh '{{.CLI_ARGS}}' ;;
+        lxc) exec bash tests/test_lxc.sh '{{.CLI_ARGS}}' ;;
+        vm) exec bash tests/test_vm.sh '{{.CLI_ARGS}}' ;;
+        *)
+          echo "Error: mksctl list --all 沒有配方 {{.CLI_ARGS}}，或 venue 不是 podman、lxc、vm" >&2
+          exit 1
+          ;;
+        esac
