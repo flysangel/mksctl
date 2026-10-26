@@ -59,7 +59,7 @@ mksctl 執行檔  ---- mksctl fetch ----> 上游（GitHub、官方下載點）
 bash 執行 <名稱>_install、<名稱>_verify
 ```
 
-`mksctl` 的版本就是配方的版本。配方 shell 呼叫 `mksctl fetch <artifact ID>` 取得已驗證的檔，呼叫 `mksctl pkgname` 取得本平台的套件名稱。這兩個子命令讀 `install.Run` 第 3 步寫下的 `run.json`，路徑由環境變數 `MKSCTL_RUN` 傳入。
+`mksctl` 的版本就是配方的版本。配方 shell 呼叫 `mksctl fetch <artifact ID>` 取得已驗證的檔，呼叫 `mksctl pkgname` 取得本平台的套件名稱。這兩個子命令讀 `install.Run` 在第 7 步執行配方前寫下的 `run.json`，路徑由環境變數 `MKSCTL_RUN` 傳入。
 
 `install.Run` 的步驟順序，由程式碼決定，順序本身是承諾：
 
@@ -97,7 +97,7 @@ bash 執行 <名稱>_install、<名稱>_verify
 
 ### 雜湊來源順序
 
-1. sigstore 簽章。有 `key` 時用金鑰驗證，沒有時用 keyless（比對 identity 與 issuer）。
+1. sigstore 簽章。有 `key` 時用金鑰驗證，沒有時用 keyless（比對 identity 與 issuer，並要求憑證帶 SCT）。
 2. 上游直連的 checksum 檔或官方 API。
 3. 自己驗證後的紀錄：`trust/hashes.yaml`。
 4. GitHub API 的 asset digest，只當備援。

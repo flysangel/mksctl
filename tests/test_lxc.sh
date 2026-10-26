@@ -7,7 +7,7 @@ set -uo pipefail
 # 容器是 privileged：容器內 root 等於 host root，受測配方寫錯路徑會動到開發者機器。
 # 所以會 swapoff -a 或 modprobe 的配方（動 host 的 swap 與 kernel）一律宣告 vm，不宣告 lxc。
 # 升級路徑是改 unprivileged，需要 subuid／subgid 映射與 cgroup 委派。
-# 用 lxc-utils 而非 incus 或 LXD：LXD 在 noble 只剩 snap，incus 帶 daemon，這層用依賴最輕的即可。
+# 用 lxc 套件（lxc-create 等經典工具）而非 incus 或 LXD：LXD 在 noble 只剩 snap，incus 帶 daemon，這層用依賴最輕的即可。
 
 [[ -n "${1:-}" ]] || {
   echo "Error: usage: test_lxc.sh <配方>" >&2
@@ -20,7 +20,7 @@ cd "$(git rev-parse --show-toplevel)" || {
   exit 1
 }
 command -v lxc-create >/dev/null || {
-  echo "Error: 需要 lxc-utils（LXC 層）：sudo apt-get install -y lxc-utils" >&2
+  echo "Error: 需要 lxc 套件（LXC 層）：sudo apt-get install -y lxc" >&2
   exit 1
 }
 [[ -x dist/mksctl ]] || {

@@ -3,7 +3,7 @@
 # 註記：函式庫不設 set 旗標，set -e 由 runner 組合腳本統一開啟
 #       本配方沒有 latest，每次安裝都會執行，所以每一步都要能重跑
 #       ubuntu 26.04 起沒有 ntpdate 套件，改裝 ntpsec-ntpdate，對照在 pkgmap.yaml
-#       用哪個時間同步服務由平台層的 time_sync_enable 決定，見 platforms/ubuntu.sh、ubuntu-26.04.sh、apk.sh
+#       用哪個時間同步服務由平台層的 time_sync_enable 決定，見 platforms/ubuntu.sh 與 apk.sh
 
 ntp_install() {
   pkg_install tzdata ntpdate || return 1

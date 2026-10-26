@@ -49,7 +49,7 @@ sudo mksctl update
 | 子命令 | 做什麼 |
 |---|---|
 | `install <名稱>...` | 需要 root。安裝配方。前置依賴自動處理，可以重跑 |
-| `check <名稱>...` | 需要 root。只做安裝前檢查，不改機器 |
+| `check <名稱>...` | 需要 root。只做安裝前檢查，不改機器。不含套件名稱檢查：套件要等寫入來源後才查得到，所以只有 `install` 會查 |
 | `list` | 列出目前平台能裝的配方。`--all` 列出全部配方與它們的實測場地，`--platform <層>` 指定平台 |
 | `status` | 列出已裝配方的版本與時間 |
 | `update [--tag vX.Y.Z]` | 需要 root。更新 `mksctl` 本身，並驗證 artifact attestation |
