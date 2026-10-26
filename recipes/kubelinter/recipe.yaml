@@ -1,0 +1,11 @@
+venue: podman
+latest:
+  github: stackrox/kube-linter
+artifacts:
+  - id: kube-linter
+    url: https://github.com/stackrox/kube-linter/releases/download/{{.Version}}/kube-linter-linux
+    checksum:
+      sigstore:
+        bundle: "{{.URL}}.sigstore.json"
+        key: trust/keys/kube-linter-cosign.pub
+      github_digest: true
