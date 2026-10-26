@@ -16,4 +16,4 @@
 
 ## 4. 授權
 
-MIT，全文見 `LICENSE`。
+Apache-2.0，全文見 `LICENSE`。

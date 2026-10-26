@@ -27,6 +27,10 @@ tasks:
             dirs+=("${d}")
           fi
         done
+        if (( ${#dirs[@]} == 0 )); then
+          echo "Info: 沒有可掃的 shell 目錄"
+          exit 0
+        fi
         find "${dirs[@]}" -name '*.sh' -type f -exec shellcheck -S warning {} +
         shfmt -d -i 2 "${dirs[@]}"
 
