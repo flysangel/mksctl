@@ -13,6 +13,8 @@ pkg_install() {
   names="$("${MKSCTL_BIN}" pkgname "$@")" || return 1
   # 套件名以空白分隔，要拆成多個參數
   read -r -a pkgs <<<"${names}" || return 1
+  # 名稱全都對到 null（本平台沒有這些套件）時沒有東西要裝；空清單交給套件管理器會出錯或白跑一次
+  [[ "${#pkgs[@]}" -gt 0 ]] || return 0
   apk add --no-cache "${pkgs[@]}" || return 1
 }
 

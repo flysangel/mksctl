@@ -142,6 +142,30 @@ func TestCommonFetchCallsBin(t *testing.T) {
 	assert.Equal(t, "fetch helm\n", out.String())
 }
 
+// pkgname 回空清單（名稱全對到 null）時，pkg_install 不能呼叫套件管理器。
+func TestPkgInstallEmptyListSkipsManager(t *testing.T) {
+	bin := t.TempDir() + "/mksctl"
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/bash\necho\n"), 0o755))
+	// 用同名函式蓋掉 apk 與 apt-get：被呼叫就印記號並失敗。
+	body := "apk() { echo MANAGER_CALLED; return 1; }\n" +
+		"apt-get() { echo MANAGER_CALLED; return 1; }\n" +
+		"demo_install() { pkg_install nothing || return 1; echo DONE; }\ndemo_verify() { :; }\n"
+	for _, lib := range []string{"apk", "apt"} {
+		t.Run(lib, func(t *testing.T) {
+			b, err := os.ReadFile("../../platforms/" + lib + ".sh")
+			require.NoError(t, err)
+			fsys := demoFS(t, body)
+			fsys["platforms/"+lib+".sh"] = &fstest.MapFile{Data: b}
+			var out bytes.Buffer
+			r := &Runner{FS: fsys, Bin: bin, Stdout: &out, Stderr: io.Discard}
+			err = r.Run(context.Background(), platform.Platform{Layers: []string{lib, "common"}}, recipe.Recipe{Name: "demo"}, nil)
+			require.NoError(t, err)
+			assert.NotContains(t, out.String(), "MANAGER_CALLED")
+			assert.Contains(t, out.String(), "DONE")
+		})
+	}
+}
+
 // 呼叫端把函式放在 || 左側時，bash 會關掉 set -e；install_bin 必須自己 return 1。
 func TestInstallBinFailsUnderOrContext(t *testing.T) {
 	body := "step() { install_bin \"$1\" foo || return 1; echo AFTER; }\n" +
