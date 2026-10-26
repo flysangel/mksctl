@@ -47,6 +47,8 @@ func newer(a, b string) bool {
 	return false
 }
 
+// parseVersion 解析 [v]X.Y.Z。每段只收數字：strconv.Atoi 會收 "+1"，
+// 不擋的話這裡收的格式就比 release.yml 與 install.sh 的 ^v[0-9]+\.[0-9]+\.[0-9]+$ 寬。
 func parseVersion(v string) ([3]int, bool) {
 	var out [3]int
 	parts := strings.Split(strings.TrimPrefix(v, "v"), ".")
@@ -54,8 +56,11 @@ func parseVersion(v string) ([3]int, bool) {
 		return out, false
 	}
 	for i, p := range parts {
+		if p == "" || strings.Trim(p, "0123456789") != "" {
+			return out, false
+		}
 		n, err := strconv.Atoi(p)
-		if err != nil || n < 0 {
+		if err != nil {
 			return out, false
 		}
 		out[i] = n

@@ -75,8 +75,9 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
-            echo "Error: tag ${TAG} 不符合 vX.Y.Z[-後綴] 格式" >&2
+          # 不收預發布後綴：install.sh 的 --tag、mksctl update 與新版提示都只認 vX.Y.Z。
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: tag ${TAG} 不符合 vX.Y.Z 格式" >&2
             exit 1
           fi
       - name: 建置並產生 checksums.txt

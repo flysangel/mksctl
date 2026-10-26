@@ -70,4 +70,5 @@ func TestNewer(t *testing.T) {
 	assert.False(t, newer("v1.0.0", "v1.0.0"))
 	assert.False(t, newer("v1.0", "v0.1.0"))
 	assert.False(t, newer("v1.0.0-rc1", "v0.1.0"))
+	assert.False(t, newer("v+1.0.0", "v0.1.0"))
 }

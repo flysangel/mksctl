@@ -112,6 +112,7 @@ GitHub 上游優先直連：版本號讀 `releases/latest` 的轉址，雜湊直
 - lxc 與 vm 層通過後寫 `tests/verified.conf`。紀錄綁配方目錄、`platforms/`、`pkgmap.yaml` 與 Go 原始碼的內容雜湊，另有時效。檢查用 `task check:verified`，這是本機工具，發版 workflow 不用。
 - `weekly.yml` 每週排程，抓上游改版造成的失敗。
 - 發版順序：check → smoke → build → 產生 `checksums.txt` 與 attestation → release。附件清單看 `.github/workflows/release.yml`。
+- tag 只收 `vX.Y.Z`，不收預發布後綴。`release.yml`、`install.sh --tag`、`mksctl update` 與新版提示用同一個格式，任一處放寬，其他幾處就會拒收或誤判那個 tag。
 
 ## 4. 設計取捨
 
