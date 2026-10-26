@@ -26,9 +26,17 @@ tasks:
       - python3 bin/check-taskfile.py
 
   lint:code:
-    desc: "[開發] 離線程式檢查（go vet、Windows 建置、shellcheck、shfmt）。CI 跑這個"
+    desc: "[開發] 離線程式檢查（go vet、gofmt、Windows 建置、shellcheck、shfmt）。CI 跑這個"
     cmds:
       - go vet ./...
+      - |
+        # gofmt -l 只列出沒排版的檔，自己不會失敗，所以要檢查輸出
+        unformatted="$(gofmt -l .)"
+        if [[ -n "${unformatted}" ]]; then
+          echo "Error: 以下檔案沒有 gofmt 排版（修法：gofmt -w <檔案>）：" >&2
+          echo "${unformatted}" >&2
+          exit 1
+        fi
       - GOOS=windows go build ./...
       - |
         # 目錄可能還沒建，只掃存在的

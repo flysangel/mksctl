@@ -20,15 +20,30 @@ import (
 
 // trustedMaterial 回傳 sigstore 的信任根。測試注入固定的 trusted_root.json，
 // 正式執行走 TUF，讓信任根跟著 sigstore 官方輪替，不寫死在程式裡。
+//
+// 只快取成功的結果。TUF 靠網路，暫時失敗或使用者取消（context.Canceled）若被記住，
+// 同一個 Fetcher 之後每次驗證都會失敗。失敗時不設 f.root，下一個呼叫者重試；
+// 鎖保證同時只有一個在抓，等鎖的呼叫者在前一個失敗後自己再試一次。
 func (f *Fetcher) trustedMaterial(ctx context.Context) (root.TrustedMaterial, error) {
-	f.rootOnce.Do(func() {
-		if f.TrustedRoot != nil {
-			f.root = f.TrustedRoot
-			return
-		}
-		f.root, f.rootErr = FetchTrustedRoot(ctx, f.TUFCacheDir)
-	})
-	return f.root, f.rootErr
+	f.rootMu.Lock()
+	defer f.rootMu.Unlock()
+	if f.root != nil {
+		return f.root, nil
+	}
+	if f.TrustedRoot != nil {
+		f.root = f.TrustedRoot
+		return f.root, nil
+	}
+	fetch := f.fetchRoot
+	if fetch == nil {
+		fetch = FetchTrustedRoot
+	}
+	tm, err := fetch(ctx, f.TUFCacheDir)
+	if err != nil {
+		return nil, err
+	}
+	f.root = tm
+	return tm, nil
 }
 
 // FetchTrustedRoot 經 TUF 取 sigstore 官方的信任根。cacheDir 空字串時用 sigstore-go 的預設快取。

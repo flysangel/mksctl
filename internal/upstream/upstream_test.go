@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -105,4 +106,40 @@ func TestEffectiveUsesReplacement(t *testing.T) {
 	assert.Equal(t, "3.16.4", Effective("3.17.0", map[string]string{"3.17.0": "3.16.4"}))
 	assert.Equal(t, "3.18.0", Effective("3.18.0", map[string]string{"3.17.0": "3.16.4"}))
 	assert.Equal(t, "3.18.0", Effective("3.18.0", nil))
+}
+
+// 暫時錯誤不能被記住：第一次 500、第二次正常，第二次呼叫要成功。
+func TestLatestRetriesAfterError(t *testing.T) {
+	var n atomic.Int32
+	srv := newCountingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) == 1 {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte("1.2.3"))
+	})
+	c := &Client{HTTP: srv.Client()}
+	spec := LatestSpec{URL: srv.URL + "/v"}
+	_, err := c.Latest(context.Background(), spec)
+	require.Error(t, err)
+	v, err := c.Latest(context.Background(), spec)
+	require.NoError(t, err)
+	assert.Equal(t, "1.2.3", v)
+	assert.Equal(t, 2, srv.hits("/v"))
+}
+
+// 使用者按 Ctrl-C 取消的第一個呼叫，不能讓之後正常的呼叫也失敗。
+func TestLatestCanceledNotCached(t *testing.T) {
+	srv := newCountingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("1.2.3"))
+	})
+	c := &Client{HTTP: srv.Client()}
+	spec := LatestSpec{URL: srv.URL + "/v"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := c.Latest(ctx, spec)
+	require.Error(t, err)
+	v, err := c.Latest(context.Background(), spec)
+	require.NoError(t, err)
+	assert.Equal(t, "1.2.3", v)
 }

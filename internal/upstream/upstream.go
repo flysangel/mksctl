@@ -64,8 +64,8 @@ func (c *Client) APIBase() string {
 	return "https://api.github.com"
 }
 
-// Latest 回傳最新版本字串。同一個 Client 對同一個 repo、網址或 provider 只查一次；
-// 查詢失敗也記住，同一輪安裝不重複打已知失敗的上游。
+// Latest 回傳最新版本字串。同一個 Client 對同一個 repo、網址或 provider 成功後只查一次；
+// 失敗不記住，下一個呼叫者會重試。
 func (c *Client) Latest(ctx context.Context, s LatestSpec) (string, error) {
 	switch {
 	case s.GitHub != "":
@@ -83,8 +83,10 @@ func (c *Client) Latest(ctx context.Context, s LatestSpec) (string, error) {
 	}
 }
 
-// memo 讓同一個鍵只執行一次 fn，結果（含錯誤）給之後的呼叫者共用。
-// 同時到的呼叫者等第一個做完，不各自打一次上游。
+// memo 讓同一個鍵同時只有一個 fn 在跑，成功的結果給之後的呼叫者共用。
+// 失敗（含 context.Canceled）不快取：暫時的 500、網路中斷或使用者取消，
+// 不該讓同一個 Client 之後的查詢全部失敗。失敗時移除進行中的項目，
+// 下一個呼叫者重新查；已在等這一次的呼叫者拿到這一次的錯誤。
 func (c *Client) memo(ctx context.Context, key string, fn func() (string, error)) (string, error) {
 	c.mu.Lock()
 	if c.cache == nil {
@@ -104,6 +106,12 @@ func (c *Client) memo(ctx context.Context, key string, fn func() (string, error)
 	c.mu.Unlock()
 
 	e.value, e.err = fn()
+	if e.err != nil {
+		// 先移除再 close：close 之後醒來的呼叫者若再呼叫，一定看不到失敗的項目。
+		c.mu.Lock()
+		delete(c.cache, key)
+		c.mu.Unlock()
+	}
 	close(e.done)
 	return e.value, e.err
 }

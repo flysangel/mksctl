@@ -101,6 +101,30 @@ type Options struct {
 	CheckOnly bool
 }
 
+// stateLockWait 是等另一個 mksctl 放鎖的上限。
+const stateLockWait = 60 * time.Second
+
+// lockStates 對每個狀態檔路徑各取一把鎖，回傳的函式依相反順序放鎖。
+// 寫成清單是為了 Windows 要鎖兩個狀態檔（機器層先、使用者層後）：
+// 所有行程都照同一個順序取鎖，才不會互相卡死。中途失敗時，已取到的鎖會先放掉。
+func lockStates(ctx context.Context, paths []string, wait time.Duration) (func(), error) {
+	var unlocks []func()
+	release := func() {
+		for i := len(unlocks) - 1; i >= 0; i-- {
+			unlocks[i]()
+		}
+	}
+	for _, p := range paths {
+		u, err := state.Lock(ctx, p, wait)
+		if err != nil {
+			release()
+			return nil, err
+		}
+		unlocks = append(unlocks, u)
+	}
+	return release, nil
+}
+
 // fetcherHook 只給測試用：讀出 Run 交給 fetcher 的設定，不必真的跑 sigstore 與網路。
 var fetcherHook func(*fetch.Fetcher)
 
@@ -151,6 +175,15 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 		return nil, err
 	}
 	statePath := filepath.Join(sysroot, StatePath)
+	// 取鎖要在讀狀態檔與任何下載、寫入之前：兩個同時跑的 mksctl 才不會各自下載、
+	// 再各自讀舊狀態檔後覆蓋對方。check 不寫任何東西，所以不取鎖。
+	if !opt.CheckOnly {
+		unlock, err := lockStates(ctx, []string{statePath}, stateLockWait)
+		if err != nil {
+			return nil, err
+		}
+		defer unlock()
+	}
 	st, err := state.Load(statePath)
 	if err != nil {
 		return nil, err

@@ -64,9 +64,11 @@ type Fetcher struct {
 	// 有設來源卻驗證失敗的檔照樣擋：作者寫了來源，失敗就代表檔案有問題。
 	AllowUnverified bool
 
-	rootOnce sync.Once
-	root     root.TrustedMaterial
-	rootErr  error
+	// fetchRoot 只給測試換掉 TUF 下載；nil 時用 FetchTrustedRoot。
+	fetchRoot func(ctx context.Context, cacheDir string) (root.TrustedMaterial, error)
+
+	rootMu sync.Mutex
+	root   root.TrustedMaterial // 只存成功的結果
 }
 
 // Result 是下載完成且驗證通過的檔案。

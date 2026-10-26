@@ -442,3 +442,25 @@ func TestGetProviderBeforeFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, fileHit.Load())
 }
+
+// TUF 暫時失敗不能被記住：第一次失敗、第二次成功，第二次呼叫要拿到信任根。
+func TestTrustedRootRetriesAfterError(t *testing.T) {
+	calls := 0
+	good := loadTestRoot(t)
+	f := &Fetcher{fetchRoot: func(context.Context, string) (root.TrustedMaterial, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("tuf 暫時失敗")
+		}
+		return good, nil
+	}}
+	_, err := f.trustedMaterial(context.Background())
+	require.Error(t, err)
+	got, err := f.trustedMaterial(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	// 成功之後就快取，不再重抓。
+	_, err = f.trustedMaterial(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 2, calls)
+}
