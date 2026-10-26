@@ -1,0 +1,4 @@
+venue: podman
+packages:
+  - openjdk-11-jdk
+  - openjdk-11-jre

@@ -43,3 +43,12 @@ docker-ce-cli: { apk: [] }
 containerd.io: { apk: [] }
 docker-buildx-plugin: { apk: [docker-cli-buildx] }
 docker-compose-plugin: { apk: [docker-cli-compose] }
+
+# nodejs：NodeSource 的 nodejs 已含 npm，ubuntu 不另裝 npm（套件庫的 npm 會和它衝突）
+npm: { apt: [] }
+
+# openjdk：alpine 的 openjdk8、openjdk11 一個套件含 JDK 與 JRE
+openjdk-8-jdk: { apk: [openjdk8] }
+openjdk-8-jre: { apk: [] }
+openjdk-11-jdk: { apk: [openjdk11] }
+openjdk-11-jre: { apk: [] }

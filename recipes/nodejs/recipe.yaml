@@ -1,0 +1,11 @@
+venue: podman
+packages:
+  - nodejs
+  - npm
+apt_sources:
+  - file: nodesource.sources
+    uris: https://deb.nodesource.com/node_24.x
+    suites: nodistro
+    components: main
+    signed_by: /etc/apt/keyrings/nodesource.asc
+    key_url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key

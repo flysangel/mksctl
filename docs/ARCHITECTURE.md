@@ -130,6 +130,8 @@ GitHub 上游優先直連：版本號讀 `releases/latest` 的轉址，雜湊直
 | Go 寫 ctl，配方用 bash | 下載只能經 `mksctl`，配方保持可讀。代價是要建置並散布執行檔 | `TestNoSha256OutsideTrust` 與 `fetch` 介面；配方直接下載無程式擋 |
 | 程式碼裡沒有 sha256 | 反目標。雜湊來源是必填 | `internal/recipe/catalog_test.go` 的 `TestNoSha256OutsideTrust`，豁免 `tests/verified.conf` |
 | 一律裝最新版 | 不釘版本。壞版本寫進 `exclude`，發新 tag 才生效 | 無程式擋 |
+| nodejs 在 ubuntu 釘 LTS major | NodeSource 沒有「最新 LTS」通道（`node_lts.x`、`node_current.x` 都是 404），只有 `node_<major>.x`。釘目前的 LTS major 24，新 LTS 出現時改 `recipes/nodejs/recipe.yaml` 的 `uris` 並發新 tag。ubuntu 套件庫的 Node 18 太舊，gemini-cli 跑不起來 | 無程式擋 |
+| gemini 用 `npm install -g`，不經 `fetch` | npm 屬套件管理器下載，完整性由 npm registry 的 integrity 驗證，跟 `pkg_install` 走 apt、apk 同類 | 無程式擋 |
 | 配方的函式不用 trap，每步明寫 `\|\| return 1` | 呼叫端可能把函式放在 `\|\|` 左邊，`set -e` 會失效 | `internal/runner` 的測試 |
 | 指定版本只用 `--tag`，參數只用 `--set` | 環境變數經 `sudo` 會靜默消失 | 無程式擋 |
 | 沒有帶 `--allow-unverified` 不裝沒有雜湊來源的配方 | 完整性驗證不能被無聲繞過 | `internal/preflight` 的靜態檢查 |

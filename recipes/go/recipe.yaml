@@ -1,0 +1,10 @@
+venue: podman
+requires:
+  - apt
+latest:
+  provider: godev
+artifacts:
+  - id: go
+    url: https://go.dev/dl/{{.Version}}.linux-{{.Arch}}.tar.gz
+    checksum:
+      provider: godev
