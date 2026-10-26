@@ -7,6 +7,7 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: 檢查 /dev/kvm 與 CPU 虛擬化旗標
         run: |
@@ -19,9 +20,12 @@ jobs:
           sudo udevadm trigger --name-match=kvm || true
           ls -l /dev/kvm || true
       - name: 安裝 qemu
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
         run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86
+          sudo -E apt-get update
+          sudo -E apt-get install -y --no-install-recommends qemu-system-x86
       - name: 用 KVM 開機
         run: |
           sudo chmod a+r /boot/vmlinuz-"$(uname -r)"
