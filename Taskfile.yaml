@@ -39,6 +39,7 @@ tasks:
     desc: "[開發] 離線單元測試"
     cmds:
       - go test ./...
+      - bash tests/test_install.sh
 
   build:
     desc: "[開發] 建置靜態執行檔到 dist/mksctl"

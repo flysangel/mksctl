@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -397,10 +399,59 @@ func TestVersion(t *testing.T) {
 	assert.Equal(t, "dev\n", out)
 }
 
-func TestUpdateStub(t *testing.T) {
-	code, _, errOut := runCLI(t, "update")
-	assert.Equal(t, 1, code)
-	assert.Equal(t, "Error: 尚未實作\n", errOut)
+// passVerifier 讓 attestation 一律通過；真的 sigstore 驗證由 internal/fetch 的測試涵蓋。
+type passVerifier struct{}
+
+func (passVerifier) Verify(context.Context, []byte, []byte) error { return nil }
+
+func TestUpdateAlreadyLatest(t *testing.T) {
+	var hit int
+	srv := newVersionServer(t, &hit)
+	h := newHarness(t)
+	h.env.version = "v0.2.0"
+	h.env.githubBase, h.env.apiBase = srv.URL, srv.URL
+	h.env.selfPath = filepath.Join(t.TempDir(), "mksctl")
+	code, out, errOut := h.run("update")
+	assert.Equal(t, 0, code, errOut)
+	assert.Equal(t, "Info: 已是最新版 v0.2.0\n", out)
+	assert.NoFileExists(t, h.env.selfPath)
+}
+
+func TestUpdateReplacesSelf(t *testing.T) {
+	const bin = "new"
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(bin)))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/flysangel/mksctl/releases/download/v0.3.0/mksctl-linux-amd64":
+			fmt.Fprint(w, bin)
+		case "/flysangel/mksctl/releases/download/v0.3.0/checksums.txt":
+			fmt.Fprintf(w, "%s  mksctl-linux-amd64\n", digest)
+		case "/repos/flysangel/mksctl/attestations/sha256:" + digest:
+			fmt.Fprint(w, `{"attestations":[{"bundle":{}}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	h := newHarness(t)
+	h.env.version = "v0.2.0"
+	h.env.githubBase, h.env.apiBase = srv.URL, srv.URL
+	h.env.selfPath = filepath.Join(t.TempDir(), "mksctl")
+	h.env.verifier = passVerifier{}
+	require.NoError(t, os.WriteFile(h.env.selfPath, []byte("old"), 0o755))
+
+	code, out, errOut := h.run("update", "--tag", "v0.3.0")
+	assert.Equal(t, 0, code, errOut)
+	assert.Equal(t, "Success: mksctl 已從 v0.2.0 更新到 v0.3.0\n", out)
+	b, err := os.ReadFile(h.env.selfPath)
+	require.NoError(t, err)
+	assert.Equal(t, bin, string(b))
+}
+
+func TestUpdateRejectsPositional(t *testing.T) {
+	code, _, errOut := runCLI(t, "update", "v0.3.0")
+	assert.Equal(t, 2, code)
+	assert.Contains(t, errOut, "Error: update 不收位置參數：v0.3.0\n")
 }
 
 // newVersionServer 回報最新版 v0.2.0，並記錄有沒有被查過。

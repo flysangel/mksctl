@@ -26,13 +26,18 @@ func (f *Fetcher) trustedMaterial(ctx context.Context) (root.TrustedMaterial, er
 			f.root = f.TrustedRoot
 			return
 		}
-		opts := tuf.DefaultOptions().WithContext(ctx)
-		if f.TUFCacheDir != "" {
-			opts = opts.WithCachePath(f.TUFCacheDir)
-		}
-		f.root, f.rootErr = root.FetchTrustedRootWithOptions(opts)
+		f.root, f.rootErr = FetchTrustedRoot(ctx, f.TUFCacheDir)
 	})
 	return f.root, f.rootErr
+}
+
+// FetchTrustedRoot 經 TUF 取 sigstore 官方的信任根。cacheDir 空字串時用 sigstore-go 的預設快取。
+func FetchTrustedRoot(ctx context.Context, cacheDir string) (root.TrustedMaterial, error) {
+	opts := tuf.DefaultOptions().WithContext(ctx)
+	if cacheDir != "" {
+		opts = opts.WithCachePath(cacheDir)
+	}
+	return root.FetchTrustedRootWithOptions(opts)
 }
 
 // keyMaterial 把釘在 trust/ 的公鑰包成信任材料。金鑰簽章的 bundle 只帶公鑰提示，
@@ -67,28 +72,34 @@ func (f *Fetcher) verifySigstore(ctx context.Context, bundleJSON, digest []byte,
 	if err != nil {
 		return fmt.Errorf("%w：取 sigstore 信任根：%v", ErrUnverified, err)
 	}
+	if s.Key == "" {
+		return VerifyKeyless(tm, bundleJSON, digest, s.Identity, s.Issuer)
+	}
+	km, err := f.keyMaterial(s.Key)
+	if err != nil {
+		return fmt.Errorf("%w：%v", ErrUnverified, err)
+	}
+	// 透明紀錄與時間戳仍由 sigstore 信任根驗，公鑰只負責簽章。
+	tm = root.TrustedMaterialCollection{tm, km}
+	return verifyBundle(tm, bundleJSON, digest, verify.WithKey())
+}
+
+// VerifyKeyless 用 Fulcio 憑證的身分驗 bundle：identity 是 SAN 的正規表示式，issuer 是 OIDC 簽發者。
+// 只比 digest，呼叫端自己算好下載檔的 sha256。mksctl update 驗 GitHub artifact attestation 用這支。
+func VerifyKeyless(tm root.TrustedMaterial, bundleJSON, digest []byte, identity, issuer string) error {
+	id, err := verify.NewShortCertificateIdentity(issuer, "", "", identity)
+	if err != nil {
+		return fmt.Errorf("%w：sigstore 身分設定：%v", ErrUnverified, err)
+	}
+	return verifyBundle(tm, bundleJSON, digest, verify.WithCertificateIdentity(id))
+}
+
+// verifyBundle 是金鑰與 keyless 兩條路共用的驗證：要求透明紀錄與時間戳各至少一筆。
+func verifyBundle(tm root.TrustedMaterial, bundleJSON, digest []byte, idOpt verify.PolicyOption) error {
 	var b bundle.Bundle
 	if err := b.UnmarshalJSON(bundleJSON); err != nil {
 		return fmt.Errorf("%w：解析 sigstore bundle：%v", ErrUnverified, err)
 	}
-
-	var idOpt verify.PolicyOption
-	if s.Key != "" {
-		km, err := f.keyMaterial(s.Key)
-		if err != nil {
-			return fmt.Errorf("%w：%v", ErrUnverified, err)
-		}
-		// 透明紀錄與時間戳仍由 sigstore 信任根驗，公鑰只負責簽章。
-		tm = root.TrustedMaterialCollection{tm, km}
-		idOpt = verify.WithKey()
-	} else {
-		id, err := verify.NewShortCertificateIdentity(s.Issuer, "", "", s.Identity)
-		if err != nil {
-			return fmt.Errorf("%w：sigstore 身分設定：%v", ErrUnverified, err)
-		}
-		idOpt = verify.WithCertificateIdentity(id)
-	}
-
 	v, err := verify.NewVerifier(tm,
 		verify.WithTransparencyLog(1),
 		verify.WithObserverTimestamps(1),

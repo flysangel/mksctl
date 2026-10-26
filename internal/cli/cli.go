@@ -90,6 +90,9 @@ type env struct {
 	runner  install.Runner
 	index   pkgindex.Index
 	version string
+	// selfPath 是 update 要換掉的檔，空字串時用正在跑的執行檔；verifier 為 nil 時走真的 sigstore。
+	selfPath string
+	verifier selfupdate.Verifier
 }
 
 func defaultEnv() env {
@@ -163,7 +166,7 @@ func run(e env, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, e.version)
 		}
 	case "update":
-		err = cmdUpdate(e)
+		err = cmdUpdate(ctx, e, rest, stdout)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usageBody)
 		return exitOK
@@ -523,10 +526,45 @@ func cmdPkgname(e env, args []string, stdout io.Writer) error {
 	return nil
 }
 
-// cmdUpdate 先驗 root，讓非 root 的錯誤訊息與日後實作一致。
-func cmdUpdate(e env) error {
+// cmdUpdate 把正在跑的 mksctl 換成新版。先驗 root：要寫 /usr/local/bin，非 root 一定失敗。
+func cmdUpdate(ctx context.Context, e env, args []string, stdout io.Writer) error {
 	if err := requireRoot(e); err != nil {
 		return err
 	}
-	return errors.New("尚未實作")
+	fset := flag.NewFlagSet("update", flag.ContinueOnError)
+	tag := fset.String("tag", "", "")
+	pos, err := parseInterspersed(fset, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) > 0 {
+		return usageErr("update 不收位置參數：%s", strings.Join(pos, " "))
+	}
+
+	dest := e.selfPath
+	if dest == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("找不到 mksctl 自身路徑：%w", err)
+		}
+		// 解開符號連結：換掉的是實體檔，連結本身不動。
+		if dest, err = filepath.EvalSymlinks(exe); err != nil {
+			return fmt.Errorf("解析 mksctl 自身路徑：%w", err)
+		}
+	}
+	v := e.verifier
+	if v == nil {
+		v = selfupdate.SigstoreVerifier{TUFCacheDir: filepath.Join(e.sysroot, "var/cache/mksctl/tuf")}
+	}
+	u := &selfupdate.Updater{Client: e.upstream(), Verifier: v}
+	res, err := u.Update(ctx, *tag, e.version, dest)
+	if err != nil {
+		return err
+	}
+	if res.UpToDate {
+		fmt.Fprintf(stdout, "Info: 已是最新版 %s\n", res.To)
+		return nil
+	}
+	fmt.Fprintf(stdout, "Success: mksctl 已從 %s 更新到 %s\n", res.From, res.To)
+	return nil
 }
