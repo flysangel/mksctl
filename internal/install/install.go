@@ -192,7 +192,7 @@ func Run(ctx context.Context, deps Deps, opt Options) (diffs []preflight.Differe
 
 	// 4. 查 apt 來源衝突。這時還沒寫任何東西。
 	for _, pl := range plans {
-		if pl.action != state.Run || pl.r.AptSource == nil {
+		if pl.action != state.Run || pl.r.AptSource == nil || !slices.Contains(p.Layers, "apt") {
 			continue
 		}
 		cs, err := aptsource.FindConflicts(sysroot, *pl.r.AptSource, p)
@@ -377,7 +377,7 @@ func prepareSources(ctx context.Context, hc *http.Client, sysroot string, p plat
 		hc = http.DefaultClient
 	}
 	for _, pl := range plans {
-		if pl.action != state.Run || pl.r.AptSource == nil {
+		if pl.action != state.Run || pl.r.AptSource == nil || !slices.Contains(p.Layers, "apt") {
 			continue
 		}
 		if err := aptsource.Write(ctx, sysroot, *pl.r.AptSource, p, hc); err != nil {

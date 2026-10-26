@@ -350,7 +350,11 @@ func Write(ctx context.Context, sysroot string, s recipe.AptSource, p platform.P
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.KeyURL, nil)
+	keyURL, err := expand("key_url", s.KeyURL, p)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, keyURL, nil)
 	if err != nil {
 		return err
 	}
@@ -360,7 +364,7 @@ func Write(ctx context.Context, sysroot string, s recipe.AptSource, p platform.P
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("aptsource: 下載金鑰失敗：%s 回 %s", s.KeyURL, resp.Status)
+		return fmt.Errorf("aptsource: 下載金鑰失敗：%s 回 %s", keyURL, resp.Status)
 	}
 	key, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {

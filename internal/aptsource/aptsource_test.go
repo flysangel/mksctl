@@ -197,3 +197,16 @@ func TestOneListTwoKeyringsAllCovered(t *testing.T) {
 	require.Len(t, cs, 1)
 	assert.Equal(t, "rm /etc/apt/sources.list.d/d.list && rm /etc/apt/keyrings/a.gpg && rm /etc/apt/keyrings/b.gpg", cs[0].Fix)
 }
+
+func TestWriteExpandsKeyURLTemplate(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Path
+		_, _ = w.Write([]byte("KEYDATA"))
+	}))
+	defer srv.Close()
+	s := dockerSource()
+	s.KeyURL = srv.URL + "/linux/{{.OSID}}/{{.Codename}}/gpg"
+	require.NoError(t, Write(context.Background(), t.TempDir(), s, ubuntu, srv.Client()))
+	assert.Equal(t, "/linux/ubuntu/noble/gpg", got)
+}
