@@ -60,6 +60,9 @@ type Fetcher struct {
 	TrustedRoot root.TrustedMaterial
 	// TrustFS 是嵌入的 FS（repo 根），讀 SigstoreSpec.Key 指的公鑰。
 	TrustFS fs.FS
+	// AllowUnverified 只放行「完全沒設雜湊來源」的檔，對應配方的 unverified 與 --allow-unverified。
+	// 有設來源卻驗證失敗的檔照樣擋：作者寫了來源，失敗就代表檔案有問題。
+	AllowUnverified bool
 
 	rootOnce sync.Once
 	root     root.TrustedMaterial
@@ -119,9 +122,11 @@ func (f *Fetcher) Get(ctx context.Context, a recipe.Artifact, version string) (R
 	if err != nil {
 		return Result{}, err
 	}
-	if err := f.verify(ctx, a.Checksum, d, name, sum, size); err != nil {
-		_ = os.Remove(tmp)
-		return Result{}, fmt.Errorf("%s（%s）：%w", a.ID, u, err)
+	if !f.AllowUnverified || hasSource(a.Checksum) {
+		if err := f.verify(ctx, a.Checksum, d, name, sum, size); err != nil {
+			_ = os.Remove(tmp)
+			return Result{}, fmt.Errorf("%s（%s）：%w", a.ID, u, err)
+		}
 	}
 	dst := filepath.Join(f.Dir, name)
 	if err := os.Rename(tmp, dst); err != nil {
@@ -177,6 +182,11 @@ func (f *Fetcher) verify(ctx context.Context, c recipe.ChecksumSpec, d tmplData,
 		}
 	}
 	return fmt.Errorf("%w：沒有可用的雜湊來源", ErrUnverified)
+}
+
+// hasSource 回報是否設了任何雜湊來源。recipe 的同名判斷沒有匯出，這裡另寫一份。
+func hasSource(c recipe.ChecksumSpec) bool {
+	return c.Sigstore != nil || c.File != "" || c.Trust || c.GitHubDigest
 }
 
 func compare(want, got string, sentinel error) error {

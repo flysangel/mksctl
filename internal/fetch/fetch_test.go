@@ -229,6 +229,20 @@ func TestGetNoSourceIsUnverified(t *testing.T) {
 	dirEmpty(t, f.Dir)
 }
 
+func TestGetAllowUnverifiedOnlyWhenNoSource(t *testing.T) {
+	srv := fileServer(t, map[string][]byte{"/tool": payload, "/tool.sha256": []byte(strings.Repeat("0", 64) + "  tool\n")}, nil)
+	f := newFetcher(t, srv)
+	f.AllowUnverified = true
+	res, err := f.Get(context.Background(), recipe.Artifact{ID: "tool", URL: srv.URL + "/tool"}, "v1")
+	require.NoError(t, err)
+	assert.Equal(t, hexSum(payload), res.SHA256)
+
+	// 有設雜湊來源時，AllowUnverified 不能讓驗證失敗的檔過關。
+	_, err = f.Get(context.Background(), recipe.Artifact{ID: "tool", URL: srv.URL + "/tool",
+		Checksum: recipe.ChecksumSpec{File: srv.URL + "/tool.sha256"}}, "v1")
+	require.ErrorIs(t, err, ErrChecksumMismatch)
+}
+
 func TestGetRetriesTransientErrors(t *testing.T) {
 	var n atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
