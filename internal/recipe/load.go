@@ -122,6 +122,9 @@ func Validate(c Catalog, defs platform.Defs) []error {
 			if !slices.Contains([]string{"podman", "lxc", "vm"}, r.Venue) {
 				add("配方 %s：venue %q 不是 podman、lxc、vm 之一", n, r.Venue)
 			}
+			if r.HasPs1 {
+				add("配方 %s：只有 Windows 配方（requires windows）能有 recipe.ps1", n)
+			}
 			if r.Scope != "" || len(r.Registry) > 0 {
 				add("配方 %s：只有 Windows 配方（requires windows）能有 scope 或 registry", n)
 			}
@@ -211,6 +214,15 @@ func validateWindows(n string, r Recipe, add func(string, ...any)) {
 		}
 		switch v.Ensure {
 		case "", "present":
+			switch v.Restore.Mode {
+			case "delete", "keep":
+			case "value":
+				if v.Restore.Value == nil {
+					add("配方 %s：登錄值 %s 的 restore 是 value，但沒有給要寫回的值", n, id)
+				}
+			default:
+				add("配方 %s：登錄值 %s 沒有宣告合法的 restore（delete、keep 或 {value: <值>}）", n, id)
+			}
 			if !slices.Contains([]string{"dword", "qword", "string", "expand_string", "multi_string"}, v.Type) {
 				add("配方 %s：登錄值 %s 的 type %q 不合法", n, id, v.Type)
 			}

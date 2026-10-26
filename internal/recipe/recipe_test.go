@@ -239,3 +239,30 @@ func TestLoadRegRestoreForms(t *testing.T) {
 	assert.Equal(t, "keep", regs[2].Restore.Mode)
 	assert.True(t, c["x"].Windows())
 }
+
+func TestValidateRestoreRequired(t *testing.T) {
+	v := dw(`HKLM\X`, "A", 1)
+	v.Restore = RegRestore{}
+	errs := Validate(winRecipe("vm", "", v), winDefs())
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], `HKLM\X\A`)
+	assert.ErrorContains(t, errs[0], "restore")
+}
+
+func TestValidateRestoreValueNeedsValue(t *testing.T) {
+	v := dw(`HKLM\X`, "A", 1)
+	v.Restore = RegRestore{Mode: "value"}
+	errs := Validate(winRecipe("vm", "", v), winDefs())
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], "restore")
+	v.Restore.Value = 0
+	assert.Empty(t, Validate(winRecipe("vm", "", v), winDefs()))
+}
+
+func TestValidateLinuxRecipeRejectsPs1(t *testing.T) {
+	c := Catalog{"x": {Name: "x", Venue: "vm", HasPs1: true}}
+	errs := Validate(c, platform.Defs{})
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0], "recipe.ps1")
+	assert.ErrorContains(t, errs[0], "windows")
+}
