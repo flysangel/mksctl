@@ -36,7 +36,7 @@ runs:
         NEEDRESTART_MODE: a
       run: |
         sudo -E apt-get update
-        sudo -E apt-get install -y --no-install-recommends lxc lxc-utils gnupg xz-utils rsync uidmap dnsmasq-base iptables
+        sudo -E apt-get install -y --no-install-recommends lxc gnupg xz-utils rsync uidmap dnsmasq-base iptables
         sudo systemctl start lxc-net || true
     - name: 開放 /dev/kvm 權限
       if: inputs.venue == 'vm'
