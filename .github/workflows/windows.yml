@@ -1,0 +1,27 @@
+name: windows
+on:
+  push:
+    branches:
+      - 'feat/**'
+      - main
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows-actions:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go test
+        run: go test ./...
+      - name: 建置 mksctl.exe
+        run: go build -o dist\mksctl.exe ./cmd/mksctl
+      - name: actions 場地實測
+        run: tests\windows\actions.ps1

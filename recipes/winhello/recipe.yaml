@@ -1,0 +1,10 @@
+# winhello：actions 場地的測試配方，只給 tests/windows/actions.ps1 用。Task 16 會刪掉它。
+venue: actions
+requires:
+  - windows
+registry:
+  - key: HKLM\SOFTWARE\mksctl-winhello
+    name: Installed
+    type: dword
+    value: 1
+    restore: delete

@@ -87,6 +87,20 @@ tasks:
     cmds:
       - bash bin/trust-refresh.sh "${RECIPE}"
 
+  test:windows:actions:
+    desc: "[開發] Windows actions 場地實測（只在 Windows 主機可跑；Linux 上印提示並略過）"
+    summary: |
+      先 go build -o dist\\mksctl.exe ./cmd/mksctl，再跑 tests/windows/actions.ps1。
+      流程在 tests/windows/actions.ps1 檔頭；CI 由 .github/workflows/windows.yml 驅動。
+    cmds:
+      - |
+        if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "${OS:-}" == "Windows_NT" ]]; then
+          go build -o dist/mksctl.exe ./cmd/mksctl
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows/actions.ps1
+        else
+          echo "Info: test:windows:actions 只在 Windows 主機可跑，略過"
+        fi
+
   test:recipe:
     desc: "[開發] 在配方宣告的場地（podman、lxc、vm）實測一個配方（用法：task test:recipe -- <配方>）"
     summary: |
