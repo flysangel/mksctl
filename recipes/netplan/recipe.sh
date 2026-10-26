@@ -13,6 +13,20 @@ _netplan_is_dhcp() {
   grep -Eq '^[[:space:]]*dhcp[46]:[[:space:]]*(true|yes)[[:space:]]*$' "$1"
 }
 
+# _netplan_wait_route — 最多等 30 秒，每秒查一次預設路由
+# dhcp-identifier 一變，networkd 會重做 DHCP，netplan apply 回傳時路由可能還沒回來
+_netplan_wait_route() {
+  local attempt
+  for attempt in $(seq 1 30); do
+    if ip route | grep -q default; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Error: 等了 30 秒仍沒有預設路由" >&2
+  return 1
+}
+
 netplan_install() {
   local yaml changed=0 yaml_changed
   local yamls=()
@@ -90,6 +104,8 @@ TEMPLATE
   if [[ "${changed}" -eq 1 ]]; then
     echo "Info: 套用 netplan" >&2
     netplan apply || return 1
+    # 同一次執行接著跑的配方需要網路，等路由回來才結束
+    _netplan_wait_route || return 1
   else
     echo "Info: 沒有改動，不套用 netplan" >&2
   fi
@@ -112,8 +128,5 @@ netplan_verify() {
     fi
   done
   # 這支改網路設定；套用後機器必須還連得出去
-  ip route | grep -q default || {
-    echo "Error: 沒有預設路由" >&2
-    return 1
-  }
+  _netplan_wait_route || return 1
 }
