@@ -39,6 +39,8 @@ _krew_install_all() {
   _krew_install_for root /root "${found[0]}" || return 1
   for user_home in /home/*; do
     [[ -d "${user_home}" ]] || continue
+    # /home 底下可能有不屬於任何帳號的孤兒目錄（lost+found、已刪帳號的殘留），跳過
+    id -u "$(basename "${user_home}")" >/dev/null 2>&1 || continue
     _krew_install_for "$(basename "${user_home}")" "${user_home}" "${found[0]}" || return 1
   done
 }
@@ -56,7 +58,7 @@ krew_install() {
   [[ "${rc}" -eq 0 ]] || return "${rc}"
 
   # 'KREW_ENV' 加引號：${HOME} 與 ${PATH} 留到使用者登入時才展開
-  cat >/etc/profile.d/krew-env.sh <<'KREW_ENV'
+  cat >/etc/profile.d/krew-env.sh <<'KREW_ENV' || return 1
 if [ -d "${HOME}/.krew/bin" ]; then
   export PATH="${HOME}/.krew/bin:${PATH}"
 fi

@@ -3,7 +3,8 @@
 # 註記：函式庫不設 set 旗標，set -e 由 runner 組合腳本統一開啟
 #       本配方沒有 latest，每次安裝都會執行，所以每一步都要能重跑
 #       使用者參數：MKSCTL_PARAM_XRDP_USER、MKSCTL_PARAM_XRDP_PASSWD；沒給時用舊腳本的預設值 desktop／desktop520
-#       （預設值是方便值，已知限制）
+#       （預設值是方便值，已知限制）。預設密碼只用在新建的帳號；
+#       既有帳號只在給了 XRDP_PASSWD 時才改密碼，重跑不會把使用者自己設的密碼蓋回預設值
 #       附屬檔在 files/（執行時在 MKSCTL_RECIPE_DIR 底下）：config/fcitx5 放進 XRDP 使用者的 ~/.config/fcitx5
 #       session 的最後一行不在這裡：startwm.sh 會 source /etc/xrdp/session.sh，由 xfce、lxqt 配方各寫自己那一行
 #       與舊版不同的地方：
@@ -17,7 +18,8 @@ _XRDP_PAM=/etc/pam.d/xrdp-sesman
 _XRDP_PAM_LINE='session required pam_env.so readenv=1 user_readenv=0'
 
 _xrdp_user() { printf '%s' "${MKSCTL_PARAM_XRDP_USER:-desktop}"; }
-_xrdp_passwd() { printf '%s' "${MKSCTL_PARAM_XRDP_PASSWD:-desktop520}"; }
+# 預設密碼只給新建的帳號；既有帳號只在使用者明確給了 XRDP_PASSWD 才改密碼
+_XRDP_DEFAULT_PASSWD=desktop520 # gitleaks:allow 舊腳本公開的預設值，spec 列為已知限制
 
 # _xrdp_in_group <使用者> <群組> — 使用者在該群組裡才成功
 # 先把輸出收進變數再比對：開著 pipefail 時，grep -q 提早結束會讓上游收到 SIGPIPE，整條管線誤判失敗
@@ -83,6 +85,7 @@ WM
 }
 
 # _xrdp_account <使用者> <密碼> — 建帳號（已有就沿用）、加進 adm 與 sudo、設密碼
+# <密碼> 可以是空字串：新建帳號時改用預設密碼，既有帳號時不動密碼
 # 拒絕 root 與 UID 小於 1000 的既有帳號：這個配方會改它的密碼與群組
 # 成功時，帳號是這次新建的就印 new，否則印 existing（給 _xrdp_user_config 判斷要不要收緊家目錄權限）
 _xrdp_account() {
@@ -97,17 +100,20 @@ _xrdp_account() {
       return 1
     fi
     usermod -a -G adm,sudo "${user}" || return 1
-    printf '%s:%s\n' "${user}" "${passwd}" | chpasswd || return 1
+    if [[ -n "${passwd}" ]]; then
+      printf '%s:%s\n' "${user}" "${passwd}" | chpasswd || return 1
+    fi
     echo existing
     return 0
   fi
   useradd -m -s /bin/bash "${user}" || return 1
   usermod -a -G adm,sudo "${user}" || return 1
-  printf '%s:%s\n' "${user}" "${passwd}" | chpasswd || return 1
+  printf '%s:%s\n' "${user}" "${passwd:-${_XRDP_DEFAULT_PASSWD}}" | chpasswd || return 1
   echo new
 }
 
 # _xrdp_user_config <使用者> <new|existing> — fcitx5 設定放進 ~/.config，只改本配方寫入的目錄與檔
+# 目標檔已存在就不寫：使用者可能改過輸入法設定，重跑不蓋掉
 # 新建帳號才把家目錄收緊成 700
 _xrdp_user_config() {
   local user="$1" state="$2" home group rel dir
@@ -122,8 +128,10 @@ _xrdp_user_config() {
     if [[ ! -d "${home}/.config/${dir}" ]]; then
       install -d -o "${user}" -g "${group}" -m 0755 "${home}/.config/${dir}" || return 1
     fi
-    install -o "${user}" -g "${group}" -m 0644 "${MKSCTL_RECIPE_DIR}/config/${rel}" \
-      "${home}/.config/${rel}" || return 1
+    if [[ ! -e "${home}/.config/${rel}" ]]; then
+      install -o "${user}" -g "${group}" -m 0644 "${MKSCTL_RECIPE_DIR}/config/${rel}" \
+        "${home}/.config/${rel}" || return 1
+    fi
   done < <(cd "${MKSCTL_RECIPE_DIR}/config" && find . -type f | sed 's|^\./||' | sort)
   if [[ "${state}" == "new" ]]; then
     chmod 700 "${home}" || return 1
@@ -133,7 +141,7 @@ _xrdp_user_config() {
 xrdp_install() {
   local user passwd state
   user="$(_xrdp_user)"
-  passwd="$(_xrdp_passwd)"
+  passwd="${MKSCTL_PARAM_XRDP_PASSWD:-}"
 
   _xrdp_packages || return 1
   _xrdp_harden || return 1
@@ -151,7 +159,7 @@ xrdp_install() {
 }
 
 xrdp_verify() {
-  local user n
+  local user n _
 
   user="$(_xrdp_user)"
 

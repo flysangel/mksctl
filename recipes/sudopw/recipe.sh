@@ -19,16 +19,18 @@ _sudopw_group() {
 }
 
 sudopw_install() {
-  local group
+  local group members
   group="$(_sudopw_group)" || return 1
 
   pkg_install sudo || return 1
 
+  # 鎖 root 之前，管理員群組至少要有一個成員；否則 root 被鎖、又沒有人能 sudo，只能進救援模式
   # alpine 的 wheel 群組由 base 映像提供；沒有的話，免密規則會對不到任何人
-  if [[ "${OS_ID}" == alpine ]] && ! getent group wheel >/dev/null; then
-    echo "Error: 群組 wheel 不存在，無法設定免密 sudo" >&2
+  members="$(getent group "${group}" | cut -d: -f4)" || members=""
+  [[ -n "${members}" ]] || {
+    echo "Error: 群組 ${group} 沒有成員。現在鎖 root，會沒有人能登入管理機器。請先安裝 bigred 或 aconfig，建立管理員帳號再裝 sudopw" >&2
     return 1
-  fi
+  }
 
   # 清除並鎖定 root 密碼，禁止以 root 密碼登入
   passwd -dl root || return 1

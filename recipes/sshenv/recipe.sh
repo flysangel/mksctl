@@ -14,6 +14,44 @@ _sshenv_append() {
   fi
 }
 
+# _sshenv_sshd_config — 把設定附加到 sshd_config 的副本，sshd -t -f 通過才換上正式檔
+# 設定寫錯會讓 sshd 重啟後起不來；舊檔尾若有 Match 區塊，附加的全域選項會落進去而不合法。
+# 所以不直接改正式檔：檢查失敗時，正式檔維持原狀。
+_sshenv_sshd_config() {
+  local conf=/etc/ssh/sshd_config tmp
+  tmp="$(mktemp /etc/ssh/sshd_config.XXXXXX)" || return 1
+  # cp -p 把權限與擁有者帶到副本，換上後正式檔的權限不變
+  cp -p "${conf}" "${tmp}" || {
+    rm -f "${tmp}"
+    return 1
+  }
+  _sshenv_append "${tmp}" 'PermitRootLogin no' || {
+    rm -f "${tmp}"
+    return 1
+  }
+  _sshenv_append "${tmp}" 'PermitUserEnvironment yes' || {
+    rm -f "${tmp}"
+    return 1
+  }
+  _sshenv_append "${tmp}" 'HostKeyAlgorithms +ssh-rsa' || {
+    rm -f "${tmp}"
+    return 1
+  }
+  _sshenv_append "${tmp}" 'PubkeyAcceptedKeyTypes +ssh-rsa' || {
+    rm -f "${tmp}"
+    return 1
+  }
+  sshd -t -f "${tmp}" || {
+    echo "Error: 新的 sshd_config 沒通過 sshd -t，保留原檔不動" >&2
+    rm -f "${tmp}"
+    return 1
+  }
+  mv -f "${tmp}" "${conf}" || {
+    rm -f "${tmp}"
+    return 1
+  }
+}
+
 # _sshenv_user_keys <使用者> <家目錄> — 尚無金鑰才產生，權限一律校正
 _sshenv_user_keys() {
   local user="$1" home="$2"
@@ -72,14 +110,12 @@ sshenv_install() {
   # 客戶端自動信任主機金鑰；附加在檔尾，會落在預設 ssh_config 的 Host * 區塊內，故沿用縮排
   _sshenv_append /etc/ssh/ssh_config '    StrictHostKeyChecking no' || return 1
 
-  # 停用 root 直接登入；允許讀 ~/.ssh/environment；放行舊式 ssh-rsa 相容舊客戶端
-  _sshenv_append /etc/ssh/sshd_config 'PermitRootLogin no' || return 1
-  _sshenv_append /etc/ssh/sshd_config 'PermitUserEnvironment yes' || return 1
-  _sshenv_append /etc/ssh/sshd_config 'HostKeyAlgorithms +ssh-rsa' || return 1
-  _sshenv_append /etc/ssh/sshd_config 'PubkeyAcceptedKeyTypes +ssh-rsa' || return 1
-
-  # 缺哪種主機金鑰補哪種；已存在的不覆寫
+  # 缺哪種主機金鑰補哪種；已存在的不覆寫。sshd -t 要有主機金鑰才過，所以放在檢查之前
   ssh-keygen -A || return 1
+  mkdir -p /run/sshd || return 1
+
+  # 停用 root 直接登入；允許讀 ~/.ssh/environment；放行舊式 ssh-rsa 相容舊客戶端
+  _sshenv_sshd_config || return 1
 
   if [[ "${OS_ID}" == "ubuntu" ]]; then
     _sshenv_ubuntu_shell || return 1
@@ -93,8 +129,7 @@ sshenv_install() {
     _sshenv_user_keys "${user}" "${home}" || return 1
   done
 
-  # 設定寫錯會讓 sshd 重啟後起不來，先檢查再套用
-  mkdir -p /run/sshd || return 1
+  # 整份設定在 _sshenv_sshd_config 檢查過才換上；這裡再檢查一次最終狀態
   sshd -t || {
     echo "Error: sshd -t 檢查 /etc/ssh/sshd_config 失敗，不重啟 sshd" >&2
     return 1
@@ -112,16 +147,24 @@ sshenv_install() {
 }
 
 sshenv_verify() {
+  local cfg
+
   grep -q 'StrictHostKeyChecking no' /etc/ssh/ssh_config || {
     echo "Error: /etc/ssh/ssh_config 沒有 StrictHostKeyChecking no" >&2
     return 1
   }
-  grep -q 'PermitRootLogin no' /etc/ssh/sshd_config || {
-    echo "Error: /etc/ssh/sshd_config 沒有 PermitRootLogin no" >&2
-    return 1
-  }
   sshd -t || {
     echo "Error: sshd -t 失敗" >&2
+    return 1
+  }
+  # 看 sshd 實際生效的值：先讀到的設定生效，drop-in 若設了 yes，附加在檔尾的 no 不會生效
+  # 先收進變數再比對：開著 pipefail 時，grep -q 提早結束會讓 sshd -T 收到 SIGPIPE
+  cfg="$(sshd -T)" || {
+    echo "Error: sshd -T 失敗" >&2
+    return 1
+  }
+  grep -qx 'permitrootlogin no' <<<"${cfg}" || {
+    echo "Error: sshd 實際生效的 PermitRootLogin 不是 no" >&2
     return 1
   }
   if [[ "${MKSCTL_INIT_RUNNING:-0}" == "1" ]]; then
