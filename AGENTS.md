@@ -44,7 +44,7 @@
 
 ### 上游換檔時跑 `task trust:refresh`
 
-`checksum: {trust: true}` 的配方沒有上游雜湊，雜湊記在 `trust/hashes.yaml`。上游換檔後，`install` 會報「與 trust 記錄不符」，訊息裡已寫出修法。
+`checksum: {trust: true}` 的配方沒有上游雜湊，雜湊記在 `trust/hashes.yaml`。上游換檔後，`install` 會報「與 trust 記錄不符」，訊息裡已寫出修法。`weekly.yml` 因同一原因失敗時，也跑這個。
 
 1. 跑 `task trust:refresh -- <配方>`。它下載最新的檔，併進 `trust/hashes.yaml`，再跑 `task test:recipe`。
 2. 實測失敗時，它把 `trust/hashes.yaml` 還原並 exit 1。這代表新檔有問題，不要硬記。

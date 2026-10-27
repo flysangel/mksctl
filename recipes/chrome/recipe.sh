@@ -14,7 +14,7 @@ _CHROME_POLICY_DIR=/etc/opt/chrome/policies/managed
 
 # _chrome_patch_desktop — 對 .desktop 每個 Exec 加旗標，已加過就略過（重跑冪等）
 # 旗標全域關閉 TLS／SSL 憑證驗證，這是高風險設定，但是使用者決定的刻意取捨，沿用舊 provision。
-# 取捨記錄見 docs/ARCHITECTURE.md〈設計取捨〉「chrome 全域關閉 TLS 憑證驗證」（B10 補上該條目）。
+# 取捨記錄見 docs/ARCHITECTURE.md〈設計取捨〉「chrome 全域關閉 TLS 憑證驗證」。
 _chrome_patch_desktop() {
   [[ -f "${_CHROME_DESKTOP}" ]] || {
     echo "Error: 找不到 ${_CHROME_DESKTOP}" >&2

@@ -132,6 +132,14 @@ GitHub 上游優先直連：版本號讀 `releases/latest` 的轉址，雜湊直
 | 一律裝最新版 | 不釘版本。壞版本寫進 `exclude`，發新 tag 才生效 | 無程式擋 |
 | nodejs 在 ubuntu 釘 LTS major | NodeSource 沒有「最新 LTS」通道（`node_lts.x`、`node_current.x` 都是 404），只有 `node_<major>.x`。釘目前的 LTS major 24，新 LTS 出現時改 `recipes/nodejs/recipe.yaml` 的 `uris` 並發新 tag。ubuntu 套件庫的 Node 18 太舊，gemini-cli 跑不起來 | 無程式擋 |
 | gemini 用 `npm install -g`，不經 `fetch` | npm 屬套件管理器下載，完整性由 npm registry 的 integrity 驗證，跟 `pkg_install` 走 apt、apk 同類 | 無程式擋 |
+| vscode 擴充套件不經 `fetch` | 擴充套件由 `code --install-extension` 從 Marketplace 下載，Marketplace 自己驗。跟 gemini 的 npm 同屬套件管理器例外 | 無程式擋 |
+| chrome 全域關閉 TLS 憑證驗證 | 配方對每個 `Exec` 加 `--ignore-certificate-errors` 等旗標。部署環境有內部自簽憑證，這是必要條件，不是待修的 bug | 無程式擋 |
+| 金鑰一律存 armored `.asc`，路徑可與官方的 `.gpg` 不同 | `apt_sources` 只會原樣存放下載的金鑰，不 dearmor。chrome 的 URI 用 `chrome/deb/`，官方 postinst 會改寫成 `chrome-stable/deb/`；兩者 URI 不同，安裝前檢查不把它們當同一來源，apt 任何時刻只看到一筆。代價：Google 下架 `chrome/deb/` 時，配方要改 | `internal/aptsource` 的衝突偵測測試 |
+| podman 用官方套件庫，不加 kubic 來源 | 三個平台的官方套件庫都有夠新的 podman，版本看各平台的套件庫。podman 不再連動 `disableSwap` 與 `ipv46` | podman 配方的實測 |
+| `disableSwap` 只刪 `/proc/swaps` 與 fstab 列出的一般檔案 | 不用 `rm -rf /swap*`：它會誤刪 ubuntu 預設的 `/swap.img`，也會刪掉其他以 swap 開頭、但不當 swap 用的根目錄檔案 | disableSwap 配方的實測 |
+| `sudopw` 不依賴 `bigred` | `needs` 不支援依平台。alpine 需要 `bigred` 先於 `sudopw`，由 `aconfig` 的 `steps` 保證；ubuntu 不串 `bigred` | aconfig 配方的實測 |
+| xfce 與 lxqt 共用 `xrdp` 配方 | 兩者 `needs: [xrdp]`，共用帳號、xrdp 修補與 fcitx5。兩個桌面共用 `/etc/xrdp/session.sh`，後裝的覆寫先裝的 | xfce、lxqt 配方的實測 |
+| 不搬 `mc` 與 `intellij` | `mc`：dl.min.io 社群版回 410 Gone，MinIO 已封存。`intellij`：JetBrains 停發 IIC，最後一版是 2025.3 | 無程式擋 |
 | 配方的函式不用 trap，每步明寫 `\|\| return 1` | 呼叫端可能把函式放在 `\|\|` 左邊，`set -e` 會失效 | `internal/runner` 的測試 |
 | 指定版本只用 `--tag`，參數只用 `--set` | 環境變數經 `sudo` 會靜默消失 | 無程式擋 |
 | 沒有帶 `--allow-unverified` 不裝沒有雜湊來源的配方 | 完整性驗證不能被無聲繞過 | `internal/preflight` 的靜態檢查 |
