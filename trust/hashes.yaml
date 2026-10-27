@@ -4,5 +4,5 @@ gitkraken/gitkraken:
     sha256: 83c2d39b1a33aa0ac27ecfcdc71f8f55f116f3a45da06188a7ce2597a0f10fba
 postman/postman:
     url: https://dl.pstmn.io/download/latest/linux64
-    size: 208175323
-    sha256: 6f6b88c74caf41b025c6035b0439b23cc63041758b894ff93c23af709fb5efaf
+    size: 208584803
+    sha256: a46ed543067a66ddcf65afa46e8b13ffb25e8fff21447661f9e475cc77bbe136
