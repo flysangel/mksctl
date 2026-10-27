@@ -3,9 +3,9 @@
 ## 1. 目前狀態
 
 - 標準驗證路徑：`task lint`、`task test`、`task test:recipe -- <配方>`、`task check:verified`。
-- 計畫 1（垂直切片）與計畫 2 的引擎前置（A 段）已在 main。計畫 2 的配方（B 段）在 `feat/recipes` 分支，除 k8s 以外都搬完。
+- 計畫 1（垂直切片）與計畫 2 的引擎前置（A 段）已在 main。計畫 2 的配方（B 段）已搬進 `recipes/`，只有 k8s 配方延後（見〈待辦〉）。
 - 配方的實測狀態：podman 層的配方不留紀錄，用 `task test:recipe -- <配方>` 重跑。lxc 與 vm 層的紀錄在 `tests/verified.conf`，用 `task check:verified` 查是否齊全、相符、未過期。配方清單用 `mksctl list --all` 查。
-- Actions 的 `release.yml`：計畫 1 的最後一個 commit 上 check 與 smoke 全綠（https://github.com/flysangel/mksctl/actions/runs/40319610488）。`feat/recipes` 還沒推，Actions 尚未跑過。build 與 release 照設計只在 tag 上跑。
+- Actions 的 `release.yml`：計畫 1 的最後一個 commit 上 check 與 smoke 全綠（https://github.com/flysangel/mksctl/actions/runs/40319610488）。B 段之後的 commit 還沒在 Actions 跑過。build 與 release 照設計只在 tag 上跑。
 - 未驗證：
   - `weekly.yml` 沒有在 Actions 跑過。workflow 要在 main 才能手動觸發，合併後第一件事是觸發一次。
   - `mksctl update` 的 attestation 驗證沒有真實 release 樣本，只有 fixture 測試。首次 release 後要實跑一次。
@@ -16,13 +16,16 @@
 
 分支 `feat/recipes`：搬計畫 2 的配方。
 
-- 做到哪：B1 到 B10 完成，文件已更新，過期的實測紀錄已重驗。
-- 下一步：推分支讓 Actions 跑三層實測，全綠後 merge 回 main。
+- 做到哪：B1 到 B10 完成；最終審查的修正已做完（含補搬 gpicview、hadooplib、vlc），受影響配方的實測紀錄已重驗。
+- 下一步：推分支讓 Actions 跑三層實測，全綠後改〈目前狀態〉、刪掉本節，再 merge 回 main。
 
 ## 3. 待辦
 
 ### 計畫 2：剩餘項目
 
+- 容器裡裝不了 aconfig、xrdp、xfce、lxqt：它們的步驟 `requires: kernel`，容器平台不提供 kernel，安裝前檢查會整個擋下，不會略過那一步。images 的 rdp 映像（容器建置裡跑 xfce、lxqt）因此無法直接改用 mksctl。由使用者決定做法：
+  - (a) resolver 或 preflight 遇到 steps 裡平台不支援的配方時略過，不擋。要改 `internal/`，動手前先通知 provision-windows。
+  - (b) 另做一個不含 kernel 步驟的容器用聚合器。
 - k8s 配方：等計畫 4（Windows）merge 進 main 後，從新的 main 另開分支做。`apt_sources` 樣板要多一個 minor 版本變數（例如 `{{.Minor}}`，由 `latest:` 的版本取 `vX.Y`），要改 `internal/aptsource` 的 expand、FindConflicts、FetchKey 與 `internal/install/install.go` 的呼叫端。動 `internal/` 前先通知 provision-windows。
 - `apt_sources` 支援 dearmor，讓金鑰路徑能對齊官方的 `.gpg` keyring。
 - `apt_sources` 支援 pin 檔。xfce 目前在 install 裡自己寫 `/etc/apt/preferences.d/mozilla`。
