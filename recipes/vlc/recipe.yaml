@@ -1,0 +1,7 @@
+# vlc：VLC 媒體播放器，用 apt 套件，不用 snap。只有 ubuntu 提供 desktop 能力，alpine 自動略過。
+venue: podman
+requires:
+  - apt
+  - desktop
+packages:
+  - vlc

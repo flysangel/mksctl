@@ -1,0 +1,8 @@
+# gpicview：輕量圖片檢視器。只有 ubuntu 提供 desktop 能力，alpine 自動略過。
+# gpicview 在 universe 元件；平台層的 apt 準備步驟已啟用 universe。
+venue: podman
+requires:
+  - apt
+  - desktop
+packages:
+  - gpicview
