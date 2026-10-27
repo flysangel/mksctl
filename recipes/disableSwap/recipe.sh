@@ -23,6 +23,19 @@ _disableSwap_files() {
   done
 }
 
+# _disableSwap_comment_fstab — 把第 3 欄是 swap 的未註解行前面加 #
+# 先寫到暫存檔，再用 cat 覆寫 fstab，保留原檔的權限與擁有者
+_disableSwap_comment_fstab() {
+  local tmp rc=0
+  tmp="$(mktemp)" || return 1
+  awk '$1 !~ /^#/ && $3 == "swap" { print "#" $0; next } { print }' /etc/fstab >"${tmp}" || rc=$?
+  if [[ "${rc}" -eq 0 ]]; then
+    cat "${tmp}" >/etc/fstab || rc=$?
+  fi
+  rm -f "${tmp}"
+  return "${rc}"
+}
+
 disableSwap_install() {
   local files path
 
@@ -31,10 +44,17 @@ disableSwap_install() {
 
   # 即時關閉所有 swap；沒有啟用的 swap 時 swapoff 會回非零，故容錯
   swapoff -a || true
+  # swapoff 失敗（例如記憶體不夠吞回 swap 的內容）時 swap 還在用；
+  # 此時刪 swap 檔會害系統崩潰，所以以 /proc/swaps 為準，還有就停止，不動 fstab 也不刪檔
+  if awk 'NR > 1' /proc/swaps | grep -q .; then
+    echo "Error: swapoff 後 swap 仍在啟用，不刪 swap 檔也不改 /etc/fstab" >&2
+    return 1
+  fi
 
-  # 把 fstab 內尚未註解的 swap 行前面加 #，讓關閉狀態在重開機後仍生效
+  # 把 fstab 內尚未註解、且第 3 欄是 swap 的行前面加 #，讓關閉狀態在重開機後仍生效
+  # 只看第 3 欄：掛載點路徑含 swap 字樣的一般項目（例如 /mnt/swapdata）不能註解掉
   if [[ -f /etc/fstab ]]; then
-    sed -i -e '/^[[:space:]]*[^#].*swap/s/^/#/' /etc/fstab || return 1
+    _disableSwap_comment_fstab || return 1
   fi
 
   while IFS= read -r path; do

@@ -12,7 +12,8 @@ disableCloudinit_install() {
   # 等 cloud-init 首次開機流程與 apt 背景作業結束再搶 dpkg lock；
   # 否則剛開機幾分鐘內 apt-get purge 會撞 dpkg-lock-frontend，用 || true 吞掉會變成假成功
   if command -v cloud-init >/dev/null; then
-    cloud-init status --wait >/dev/null 2>&1 || true
+    # 加逾時：cloud-init 卡住時 --wait 不會自己結束，整條 aconfig 會永遠停住；逾時就往下走，後面的 purge 有 dpkg lock 逾時把關
+    timeout 300 cloud-init status --wait >/dev/null 2>&1 || true
   fi
   for _ in $(seq 1 60); do
     fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break

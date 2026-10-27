@@ -21,20 +21,33 @@ _vscode_install_font() {
   fc-cache -f || return 1
 }
 
+# _vscode_put <帳號> <群組> <來源> <目標> — 落地一個設定檔；目標已存在且還沒有備份時，先備份成 .bk
+# 字型版本一變，這個配方就會重跑並覆寫設定檔；.bk 保留使用者最早的版本，不會被後續的覆寫蓋掉
+_vscode_put() {
+  local user="$1" group="$2" src="$3" dst="$4"
+  if [[ -f "${dst}" && ! -f "${dst}.bk" ]]; then
+    cp -p "${dst}" "${dst}.bk" || return 1
+  fi
+  install -D -o "${user}" -g "${group}" -m 0644 "${src}" "${dst}" || return 1
+}
+
 # _vscode_setup_user <帳號> — 落地設定檔並裝擴充套件；擁有者改回該帳號
 _vscode_setup_user() {
   local user="$1"
   local home="/home/${user}"
-  local ext
+  local ext group
 
-  install -D -o "${user}" -g "${user}" -m 0644 "${MKSCTL_RECIPE_DIR}/Code/User/settings.json" \
+  # 主群組不一定跟帳號同名
+  group="$(id -gn "${user}")" || return 1
+
+  _vscode_put "${user}" "${group}" "${MKSCTL_RECIPE_DIR}/Code/User/settings.json" \
     "${home}/.config/Code/User/settings.json" || return 1
-  install -D -o "${user}" -g "${user}" -m 0644 "${MKSCTL_RECIPE_DIR}/crossnote/style.less" \
+  _vscode_put "${user}" "${group}" "${MKSCTL_RECIPE_DIR}/crossnote/style.less" \
     "${home}/.config/crossnote/style.less" || return 1
-  install -D -o "${user}" -g "${user}" -m 0644 "${MKSCTL_RECIPE_DIR}/vscode/argv.json" \
+  _vscode_put "${user}" "${group}" "${MKSCTL_RECIPE_DIR}/vscode/argv.json" \
     "${home}/.vscode/argv.json" || return 1
   # install -D 建立的上層目錄屬於 root，改回該帳號
-  chown -R "${user}:${user}" "${home}/.config/Code" "${home}/.config/crossnote" "${home}/.vscode" || return 1
+  chown -R "${user}:${group}" "${home}/.config/Code" "${home}/.config/crossnote" "${home}/.vscode" || return 1
 
   # extensions.txt 的 foxundermoon.shell-format@7.2.5 是刻意釘版本，沿用舊 provision 的釘版，理由待查
   # （舊 provision 的 vscode.ext 與文件都沒寫理由）；其餘擴充套件不釘

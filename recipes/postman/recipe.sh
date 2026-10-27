@@ -45,6 +45,10 @@ postman_verify() {
     echo "Error: Postman 缺共享庫" >&2
     return 1
   fi
+  [[ -f "${_POSTMAN_DESKTOP}" ]] || {
+    echo "Error: 找不到 ${_POSTMAN_DESKTOP}" >&2
+    return 1
+  }
   # 佔位字必須已被換掉
   if command grep -q -e 'EXECPATH' -e 'ICONPATH' "${_POSTMAN_DESKTOP}"; then
     echo "Error: ${_POSTMAN_DESKTOP} 還有未替換的 EXECPATH 或 ICONPATH" >&2

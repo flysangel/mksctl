@@ -22,13 +22,15 @@ enableSwap_install() {
 
   if [[ ! -f /swapfile ]]; then
     fallocate -l "${size_gb}G" /swapfile || return 1
-    chmod 600 /swapfile || return 1
-    mkswap /swapfile || return 1
   fi
+  chmod 600 /swapfile || return 1
 
+  # 沒啟用就一律 mkswap 再 swapon：fallocate 之後、mkswap 之前被中斷時，檔案已存在卻沒有 swap 簽章，
+  # 只靠「檔案不存在才 mkswap」，重跑時 swapon 會失敗。對還沒啟用的檔重做 mkswap 是安全的
   if awk 'NR > 1 { print $1 }' /proc/swaps | grep -qx '/swapfile'; then
     echo "Info: /swapfile 已啟用，略過 swapon" >&2
   else
+    mkswap /swapfile || return 1
     swapon /swapfile || return 1
   fi
 
