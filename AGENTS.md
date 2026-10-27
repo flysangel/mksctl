@@ -98,6 +98,7 @@ feature 分支上新增或改的 workflow，不能用 `workflow_dispatch` 手動
 ### 改了哪類檔要多驗什麼
 
 - 改配方、`platforms/`、`pkgmap.yaml` 或 Go 原始碼：lxc 與 vm 層的紀錄會過期。重跑受影響配方，再跑 `task check:verified`。
+- 改了 xrdp 配方的帳號邏輯：另跑 `task test:xrdp-account`，確認既有帳號重跑時密碼雜湊不變。
 - 改了 `.github/` 底下任何東西：推 `feat/**` 分支，看 Actions 的 `release.yml` 是否全綠。
 - 改了 `.githooks/` 或 `bin/check-*.py`：照 `~/.claude/rules/githooks.md`〈改了 `.githooks/` 底下任何東西〉再跑一次真的 hook。
 - 改了 Unix 專屬的程式碼：確認有 build tag，並跑 `GOOS=windows go build ./...`。
