@@ -15,6 +15,10 @@ USAGE="usage: install.sh [--tag vX.Y.Z] [--base-url <https://...>]"
 # 只走 https：install.sh 不驗 attestation，真實性只靠 TLS。
 # --proto 也管轉址，https 轉 http 會被拒（實測 curl 8.5.0）。
 CURL_OPTS=(-fsSL --proto '=https' --tlsv1.2 --retry 5 --retry-delay 2)
+# 下載上限。MAX_BIN_BYTES 是唯一的正本：release.yml 的大小閘門、tests/test_install.sh 與
+# internal/selfupdate 的一致性測試都讀這一行，改寫法時要一起改。
+MAX_BIN_BYTES=$((128 << 20))
+MAX_SUMS_BYTES=$((64 << 10))
 
 # 給 trap 用：下載暫存目錄與落地前的暫存檔
 W=""
@@ -26,6 +30,24 @@ cleanup() {
   fi
   if [[ -n "${W}" ]]; then
     rm -rf "${W}"
+  fi
+}
+
+# download <網址> <輸出檔> <上限 bytes> — 超過上限時中止，不重試
+download() {
+  local url="$1" out="$2" max="$3"
+  local rc=0
+
+  # curl 對 exit 63（超過 --max-filesize）不重試。沒有 Content-Length 時，
+  # curl 下載中途超過上限也會中止（實測 curl 8.5.0）。
+  curl "${CURL_OPTS[@]}" --max-filesize "${max}" -o "${out}" "${url}" || rc=$?
+  if ((rc == 63)); then
+    echo "Error: ${url} 超過上限 ${max} bytes，沒有安裝" >&2
+    return 1
+  fi
+  if ((rc != 0)); then
+    echo "Error: 下載 ${url} 失敗" >&2
+    return 1
   fi
 }
 
@@ -96,14 +118,8 @@ main() {
   trap cleanup EXIT
 
   echo "Info: 下載 ${url}/${ASSET}"
-  curl "${CURL_OPTS[@]}" -o "${W}/${ASSET}" "${url}/${ASSET}" || {
-    echo "Error: 下載 ${url}/${ASSET} 失敗" >&2
-    return 1
-  }
-  curl "${CURL_OPTS[@]}" -o "${W}/checksums.txt" "${url}/checksums.txt" || {
-    echo "Error: 下載 ${url}/checksums.txt 失敗" >&2
-    return 1
-  }
+  download "${url}/${ASSET}" "${W}/${ASSET}" "${MAX_BIN_BYTES}" || return 1
+  download "${url}/checksums.txt" "${W}/checksums.txt" "${MAX_SUMS_BYTES}" || return 1
 
   # 只取執行檔那一行再比對：--ignore-missing 在 checksums.txt 漏列這個檔時會當成通過。
   line="$(awk -v f="${ASSET}" '$2 == f || $2 == "*" f' "${W}/checksums.txt")"

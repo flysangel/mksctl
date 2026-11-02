@@ -230,4 +230,42 @@ else
   bad "不是 linux/amd64 時 exit 1、不送請求且目標檔不變（rc=${rc}，請求數 ${before} → ${after}）：${out}"
 fi
 
+# v0.0.3 的 checksums.txt 有正確那一行，但補到超過 64 KiB
+make_release "${srv}/download/v0.0.3" v0.0.3
+head -c $((64 << 10)) /dev/zero | tr '\0' '#' >>"${srv}/download/v0.0.3/checksums.txt"
+root="${W}/root-big-sums"
+mkdir -p "${root}/usr/local/bin"
+printf 'old\n' >"${root}/usr/local/bin/mksctl"
+rc=0
+out="$(MKSCTL_SYSROOT="${root}" bash "${script}" --base-url "${base}" --tag v0.0.3 2>&1)" || rc=$?
+if ((rc == 1)) && [[ "$(cat "${root}/usr/local/bin/mksctl")" == "old" && "${out}" == *"超過上限"* ]]; then
+  ok "checksums.txt 超過 64 KiB 時 exit 1 且目標檔不變"
+else
+  bad "checksums.txt 超過 64 KiB 時 exit 1 且目標檔不變（rc=${rc}）：${out}"
+fi
+
+# 執行檔上限從 install.sh 讀，不在這裡另寫一份。release.yml 的大小閘門用同一個寫法。
+if [[ "$(command grep -E '^MAX_BIN_BYTES=' "${script}")" =~ ^MAX_BIN_BYTES=\$\(\(([0-9]+)\ \<\<\ ([0-9]+)\)\)$ ]]; then
+  max_bin=$((BASH_REMATCH[1] << BASH_REMATCH[2]))
+  # v0.0.4 的執行檔能跑、雜湊也對，只是比上限多 1 byte。用稀疏檔，不佔磁碟。
+  dir="${srv}/download/v0.0.4"
+  mkdir -p "${dir}"
+  printf '#!/bin/sh\necho v0.0.4\nexit 0\n' >"${dir}/mksctl-linux-amd64"
+  truncate -s "$((max_bin + 1))" "${dir}/mksctl-linux-amd64"
+  (cd "${dir}" && sha256sum mksctl-linux-amd64 >checksums.txt)
+  root="${W}/root-big-bin"
+  mkdir -p "${root}/usr/local/bin"
+  printf 'old\n' >"${root}/usr/local/bin/mksctl"
+  rc=0
+  out="$(MKSCTL_SYSROOT="${root}" bash "${script}" --base-url "${base}" --tag v0.0.4 2>&1)" || rc=$?
+  if ((rc == 1)) && [[ "$(cat "${root}/usr/local/bin/mksctl")" == "old" && "${out}" == *"超過上限"* ]]; then
+    ok "執行檔超過 MAX_BIN_BYTES 時 exit 1 且目標檔不變"
+  else
+    bad "執行檔超過 MAX_BIN_BYTES 時 exit 1 且目標檔不變（rc=${rc}）：${out}"
+  fi
+  rm -rf "${dir}"
+else
+  bad "bin/install.sh 沒有 MAX_BIN_BYTES=\$((<數字> << <數字>)) 這一行"
+fi
+
 exit "${fail}"
