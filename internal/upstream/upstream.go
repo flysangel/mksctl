@@ -65,18 +65,23 @@ func (c *Client) APIBase() string {
 }
 
 // Latest 回傳最新版本字串。同一個 Client 對同一個 repo、網址或 provider 成功後只查一次；
-// 失敗不記住，下一個呼叫者會重試。
+// 失敗不記住，下一個呼叫者會重試。一次查詢內，連線錯誤、5xx 與 429 最多試 attempts 次。
 func (c *Client) Latest(ctx context.Context, s LatestSpec) (string, error) {
 	switch {
 	case s.GitHub != "":
-		return c.memo(ctx, "github:"+s.GitHub, func() (string, error) { return c.latestGitHub(ctx, s.GitHub) })
+		return c.memo(ctx, "github:"+s.GitHub, func() (string, error) {
+			return retry(ctx, func() (string, error) { return c.latestGitHub(ctx, s.GitHub) })
+		})
 	case s.URL != "":
-		return c.memo(ctx, "url:"+s.URL, func() (string, error) { return c.latestURL(ctx, s.URL) })
+		return c.memo(ctx, "url:"+s.URL, func() (string, error) {
+			return retry(ctx, func() (string, error) { return c.latestURL(ctx, s.URL) })
+		})
 	case s.Provider != "":
 		p, ok := Providers[s.Provider]
 		if !ok {
 			return "", fmt.Errorf("upstream: 沒有名為 %q 的 provider", s.Provider)
 		}
+		// provider 讀內文的 body 自己會重試，這裡不再包一層，免得重試次數相乘。
 		return c.memo(ctx, "provider:"+s.Provider, func() (string, error) { return p.Latest(ctx, c) })
 	default:
 		return "", errors.New("upstream: latest 沒有設 github、url 或 provider")
@@ -140,10 +145,13 @@ func (c *Client) latestGitHub(ctx context.Context, repo string) (string, error) 
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := hc.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("upstream: 查 %s：%w", repo, err)
+		return "", requestErr(ctx, repo, err)
 	}
 	defer resp.Body.Close()
 	loc := resp.Header.Get("Location")
+	if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+		return "", statusErr(u, resp.StatusCode)
+	}
 	if resp.StatusCode < 300 || resp.StatusCode >= 400 || loc == "" {
 		return "", fmt.Errorf("upstream: %s 沒有轉址（HTTP %d）", u, resp.StatusCode)
 	}
@@ -165,16 +173,16 @@ func (c *Client) latestURL(ctx context.Context, u string) (string, error) {
 	}
 	resp, err := c.HTTPClient().Do(req)
 	if err != nil {
-		return "", fmt.Errorf("upstream: 查 %s：%w", u, err)
+		return "", requestErr(ctx, u, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("upstream: %s 回 HTTP %d", u, resp.StatusCode)
+		return "", statusErr(u, resp.StatusCode)
 	}
 	// 版本檔只有一行，限制讀取量，避免網址填錯時把整個網頁讀進來。
 	b, err := ReadLimited(resp.Body, versionLimit)
 	if err != nil {
-		return "", fmt.Errorf("upstream: 讀 %s：%w", u, err)
+		return "", readErr(ctx, u, err)
 	}
 	v := strings.TrimSpace(string(b))
 	if v == "" {

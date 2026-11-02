@@ -108,12 +108,12 @@ func TestEffectiveUsesReplacement(t *testing.T) {
 	assert.Equal(t, "3.18.0", Effective("3.18.0", nil))
 }
 
-// 暫時錯誤不能被記住：第一次 500、第二次正常，第二次呼叫要成功。
+// 失敗不能被記住：第一次 404（不重試的錯誤）、第二次正常，第二次呼叫要成功。
 func TestLatestRetriesAfterError(t *testing.T) {
 	var n atomic.Int32
 	srv := newCountingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if n.Add(1) == 1 {
-			http.Error(w, "boom", http.StatusInternalServerError)
+			http.Error(w, "gone", http.StatusNotFound)
 			return
 		}
 		_, _ = w.Write([]byte("1.2.3"))

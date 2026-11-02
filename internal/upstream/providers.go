@@ -38,24 +38,28 @@ const bodyLimit = 4 << 20
 // godev 的 Latest 與 Checksum 讀同一份 JSON，不必下載兩次。
 func (c *Client) body(ctx context.Context, u string) (string, error) {
 	return c.memo(ctx, "body:"+u, func() (string, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			return "", err
-		}
-		resp, err := c.HTTPClient().Do(req)
-		if err != nil {
-			return "", fmt.Errorf("upstream: 查 %s：%w", u, err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("upstream: %s 回 HTTP %d", u, resp.StatusCode)
-		}
-		b, err := ReadLimited(resp.Body, bodyLimit)
-		if err != nil {
-			return "", fmt.Errorf("upstream: 讀 %s：%w", u, err)
-		}
-		return string(b), nil
+		return retry(ctx, func() (string, error) { return c.getBody(ctx, u) })
 	})
+}
+
+func (c *Client) getBody(ctx context.Context, u string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.HTTPClient().Do(req)
+	if err != nil {
+		return "", requestErr(ctx, u, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", statusErr(u, resp.StatusCode)
+	}
+	b, err := ReadLimited(resp.Body, bodyLimit)
+	if err != nil {
+		return "", readErr(ctx, u, err)
+	}
+	return string(b), nil
 }
 
 // godev 讀 go.dev/dl 的 JSON。清單由新到舊，可能夾著 rc 或 beta（stable: false）。
