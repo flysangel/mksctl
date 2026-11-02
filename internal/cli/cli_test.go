@@ -21,6 +21,7 @@ import (
 	"github.com/flysangel/mksctl/internal/preflight"
 	"github.com/flysangel/mksctl/internal/recipe"
 	"github.com/flysangel/mksctl/internal/state"
+	"github.com/flysangel/mksctl/internal/upstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -587,4 +588,7 @@ func TestDefaultEnvHasHardenedClient(t *testing.T) {
 	require.NotNil(t, c)
 	assert.NotSame(t, http.DefaultClient, c)
 	assert.NotNil(t, c.CheckRedirect)
+	tr, ok := c.Transport.(*http.Transport)
+	require.True(t, ok)
+	assert.Equal(t, upstream.HeaderTimeout, tr.ResponseHeaderTimeout)
 }
