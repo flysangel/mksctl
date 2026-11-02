@@ -93,7 +93,7 @@ jobs:
       - name: 檢查執行檔不超過 install.sh 的上限
         run: |
           # 上限的正本是 bin/install.sh 的 MAX_BIN_BYTES。超過時 install.sh 會拒收，不能發這一版。
-          line="$(grep -E '^MAX_BIN_BYTES=' bin/install.sh)"
+          line="$(grep -E '^MAX_BIN_BYTES=' bin/install.sh || true)"
           if [[ ! "${line}" =~ ^MAX_BIN_BYTES=\$\(\(([0-9]+)\ \<\<\ ([0-9]+)\)\)$ ]]; then
             echo "Error: bin/install.sh 沒有 MAX_BIN_BYTES=\$((<數字> << <數字>)) 這一行" >&2
             exit 1
