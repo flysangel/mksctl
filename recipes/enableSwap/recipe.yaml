@@ -1,0 +1,5 @@
+venue: vm
+requires:
+  - kernel
+packages:
+  - util-linux

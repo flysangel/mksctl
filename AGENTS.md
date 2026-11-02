@@ -44,7 +44,7 @@
 
 ### 上游換檔時跑 `task trust:refresh`
 
-`checksum: {trust: true}` 的配方沒有上游雜湊，雜湊記在 `trust/hashes.yaml`。上游換檔後，`install` 會報「與 trust 記錄不符」，訊息裡已寫出修法。
+`checksum: {trust: true}` 的配方沒有上游雜湊，雜湊記在 `trust/hashes.yaml`。上游換檔後，`install` 會報「與 trust 記錄不符」，訊息裡已寫出修法。`weekly.yml` 的 podman 實測報與 trust 記錄不符時，也跑這個。
 
 1. 跑 `task trust:refresh -- <配方>`。它下載最新的檔，併進 `trust/hashes.yaml`，再跑 `task test:recipe`。
 2. 實測失敗時，它把 `trust/hashes.yaml` 還原並 exit 1。這代表新檔有問題，不要硬記。
@@ -98,6 +98,7 @@ feature 分支上新增或改的 workflow，不能用 `workflow_dispatch` 手動
 ### 改了哪類檔要多驗什麼
 
 - 改配方、`platforms/`、`pkgmap.yaml` 或 Go 原始碼：lxc 與 vm 層的紀錄會過期。重跑受影響配方，再跑 `task check:verified`。
+- 改了 xrdp 配方的帳號邏輯：另跑 `task test:xrdp-account`，確認既有帳號重跑時密碼雜湊不變。
 - 改了 `.github/` 底下任何東西：推 `feat/**` 分支，看 Actions 的 `release.yml` 是否全綠。
 - 改了 `.githooks/` 或 `bin/check-*.py`：照 `~/.claude/rules/githooks.md`〈改了 `.githooks/` 底下任何東西〉再跑一次真的 hook。
 - 改了 Unix 專屬的程式碼：確認有 build tag，並跑 `GOOS=windows go build ./...`。

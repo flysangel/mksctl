@@ -1,0 +1,6 @@
+venue: vm
+packages:
+  - podman
+  - skopeo
+  - buildah
+  - catatonit

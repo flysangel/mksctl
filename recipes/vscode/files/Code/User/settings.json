@@ -1,0 +1,51 @@
+{
+    "[markdown]": {
+        "editor.defaultFormatter": "DavidAnson.vscode-markdownlint"
+    },
+    "[yaml]": {
+        "editor.defaultFormatter": "redhat.vscode-yaml"
+    },
+    //"debug.console.fontSize": 18,
+    "editor.fontFamily": "'Ubuntu Mono','LXGW WenKai Mono TC'",
+    //"editor.fontSize": 18,
+    "files.associations": {
+        "*.sh": "shellscript",
+        "*.txt": "shellscript",
+        "*.vmx": "shellscript"
+    },
+    "markdownlint.config": {
+        "MD014": false,
+        "MD029": false
+    },
+    "redhat.telemetry.enabled": false,
+    "terminal.integrated.enableMultiLinePasteWarning": "never",
+    //"terminal.integrated.fontSize": 18,
+    "window.newWindowDimensions": "maximized",
+    "window.restoreFullscreen": true,
+    "window.zoomLevel": 1,
+    "workbench.colorTheme": "Default Dark Modern",
+    "yaml.schemas": {
+        "https://json.schemastore.org/kustomization.json": [
+            "kustomization.yaml"
+        ],
+        "https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json": [
+            "*workflow*.yaml"
+        ],
+        "https://taskfile.dev/schema.json": [
+            "Taskfile.yml",
+            "Taskfile.yaml",
+            "taskfile.yml",
+            "taskfile.yaml",
+        ],
+        "Kubernetes": [
+            "*.yml",
+            "*.yaml",
+            "!kustomization.yaml",
+            "!*workflow*.yaml",
+            "!*Taskfile.yml",
+            "!*Taskfile.yaml",
+            "!*taskfile.yml",
+            "!*taskfile.yaml"
+        ]
+    }
+}

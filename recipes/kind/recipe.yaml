@@ -1,0 +1,10 @@
+venue: podman
+needs:
+  - podman
+latest:
+  github: kubernetes-sigs/kind
+artifacts:
+  - id: kind
+    url: https://kind.sigs.k8s.io/dl/{{.Version}}/kind-linux-{{.Arch}}
+    checksum:
+      file: "{{.URL}}.sha256sum"

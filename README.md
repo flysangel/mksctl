@@ -58,10 +58,10 @@ sudo mksctl update
 ### 2.1 參數
 
 - `--set KEY=VALUE`：傳參數給配方。只有配方在 `recipe.yaml` 的 `params` 宣告過的名稱才收。
-- 值寫 `-` 時從 stdin 讀。密碼用這個方式傳，才不會出現在 `ps` 裡。目前的配方都沒有宣告參數，之後有參數的配方照這個寫法：
+- 值寫 `-` 時從 stdin 讀。密碼用這個方式傳，才不會出現在 `ps` 裡。例如 `xrdp` 配方的 `XRDP_PASSWD`：
 
   ```bash
-  printf '%s' "${PASSWORD}" | sudo mksctl install <配方> --set <名稱>=-
+  printf '%s' "${XRDP_PASSWD}" | sudo mksctl install xfce --set XRDP_PASSWD=-
   ```
 
 - `--allow-unverified`：允許安裝沒有任何雜湊來源的配方。沒帶這個旗標時，安裝前檢查會停止。

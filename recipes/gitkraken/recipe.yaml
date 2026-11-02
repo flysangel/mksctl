@@ -1,0 +1,15 @@
+venue: podman
+requires:
+  - apt
+  - desktop
+packages:
+  - libsecret-1-0
+  - libsecret-1-dev
+# 網址沒有版本號，所以不填 latest，每次安裝都會執行。
+# 上游沒有公布雜湊，改用 trust 記錄；上游換檔時 install 會停下，修法是 task trust:refresh -- gitkraken。
+# trust 記錄只有 amd64（已知限制）。
+artifacts:
+  - id: gitkraken
+    url: https://release.gitkraken.com/linux/gitkraken-amd64.deb
+    checksum:
+      trust: true

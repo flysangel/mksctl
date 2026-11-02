@@ -1,0 +1,13 @@
+# 聚合器：兩個發行版的步驟相同，所以寫在 common 層。apt 前置是平台層的準備步驟，不是配方。
+# kind 的 needs 會把 podman 一起拉進來。
+venue: podman
+steps:
+  common:
+    - base
+    - kind
+    - kubectl
+    - krew
+    - kustomize
+    - kubelinter
+    - helm
+    - hadolint

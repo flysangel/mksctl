@@ -1,0 +1,33 @@
+venue: podman
+requires:
+  - apt
+  - desktop
+packages:
+  - code
+  - tar
+  - fontconfig
+  - libx11-xcb1
+  - libdbus-1-3
+  - libxkbfile1
+# latest 只用來取得字型 LxgwWenkaiTC 的版本；字型版本沒變時，整個配方不重跑（含 code 本身）。
+# code 的更新靠 apt upgrade，不靠重跑本配方。
+latest:
+  github: lxgw/LxgwWenkaiTC
+artifacts:
+  - id: lxgw-wenkai-tc
+    url: https://github.com/lxgw/LxgwWenkaiTC/releases/download/{{.Version}}/lxgw-wenkai-tc-{{.Version}}.tar.gz
+    checksum:
+      # 上游沒有 checksum 檔也沒有簽章；改用 GitHub 公布的資產 digest
+      github_digest: true
+# 官方 code 套件的 postinst 偵測到已有來源指向 packages.microsoft.com/repos/code，就不再寫自己的 vscode.sources，
+# 所以這裡的檔名與 URIs 與官方一致，apt 永遠只看到一筆來源、一個 Signed-By。
+# 官方文件把金鑰 gpg --dearmor 成 /usr/share/keyrings/microsoft.gpg，但 mksctl 只能原樣存放 armored 金鑰，
+# 而 apt 不認 .gpg 副檔名裡的 armored 內容，所以金鑰放 /usr/share/keyrings/microsoft.asc。
+# postinst 在 microsoft.gpg 不存在時會自己補寫一份；那份不被任何來源引用，無害。
+apt_sources:
+  - file: vscode.sources
+    uris: https://packages.microsoft.com/repos/code
+    suites: stable
+    components: main
+    signed_by: /usr/share/keyrings/microsoft.asc
+    key_url: https://packages.microsoft.com/keys/microsoft.asc

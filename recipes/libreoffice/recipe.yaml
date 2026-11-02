@@ -1,0 +1,24 @@
+venue: podman
+requires:
+  - apt
+  - desktop
+packages:
+  - tar
+# 下載點用 NCHC 鏡像（台灣，速度較好）；鏡像只有 .asc、沒有逐檔 .sha256，
+# 所以雜湊改向 TDF 官方主站取，每個檔旁邊都有 .sha256。
+# 主程式、繁中語言包、繁中說明包各是一個 artifact。
+latest:
+  provider: tdf-libreoffice
+artifacts:
+  - id: libreoffice
+    url: https://free.nchc.org.tw/tdf/libreoffice/stable/{{.Version}}/deb/x86_64/LibreOffice_{{.Version}}_Linux_x86-64_deb.tar.gz
+    checksum:
+      file: https://download.documentfoundation.org/libreoffice/stable/{{.Version}}/deb/x86_64/LibreOffice_{{.Version}}_Linux_x86-64_deb.tar.gz.sha256
+  - id: libreoffice-langpack
+    url: https://free.nchc.org.tw/tdf/libreoffice/stable/{{.Version}}/deb/x86_64/LibreOffice_{{.Version}}_Linux_x86-64_deb_langpack_zh-TW.tar.gz
+    checksum:
+      file: https://download.documentfoundation.org/libreoffice/stable/{{.Version}}/deb/x86_64/LibreOffice_{{.Version}}_Linux_x86-64_deb_langpack_zh-TW.tar.gz.sha256
+  - id: libreoffice-helppack
+    url: https://free.nchc.org.tw/tdf/libreoffice/stable/{{.Version}}/deb/x86_64/LibreOffice_{{.Version}}_Linux_x86-64_deb_helppack_zh-TW.tar.gz
+    checksum:
+      file: https://download.documentfoundation.org/libreoffice/stable/{{.Version}}/deb/x86_64/LibreOffice_{{.Version}}_Linux_x86-64_deb_helppack_zh-TW.tar.gz.sha256

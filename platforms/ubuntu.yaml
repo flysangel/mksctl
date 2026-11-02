@@ -1,5 +1,6 @@
 provides:
   - time-sync
+  - desktop
 # 台灣鏡像與 -proposed、-backports 是使用者決定，沿用舊 provision 的 sources.list。
 # 只在這次要裝 apt 套件時寫入（install.Run 第 5 步）。
 # 用 http 而不是 https：容器映像沒有 ca-certificates 時，https 來源連 apt-get update 都做不了，

@@ -117,3 +117,12 @@ func scanForSha256(root string) ([]string, error) {
 	}
 	return hits, nil
 }
+
+// aconfig 的 ubuntu 步驟把 netplan 排在鏈尾（舊 aconfig 沒有這一步，這次新增）：netplan 動網路設定，放最後才不會讓前面的步驟斷線。
+func TestAconfigNetplanLast(t *testing.T) {
+	c, err := Load(mksctl.FS)
+	require.NoError(t, err)
+	steps := c["aconfig"].Steps["ubuntu"]
+	require.NotEmpty(t, steps)
+	require.Equal(t, "netplan", steps[len(steps)-1])
+}

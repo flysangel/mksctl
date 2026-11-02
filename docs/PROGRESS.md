@@ -3,22 +3,28 @@
 ## 1. 目前狀態
 
 - 標準驗證路徑：`task lint`、`task test`、`task test:recipe -- <配方>`、`task check:verified`。
-- 計畫 1（垂直切片）功能完成：核心引擎、`install.sh` 與 `mksctl update`、`release.yml`、`weekly.yml`。
-- 第一批五個配方 base、helm、ntp、docker、kubelinter，在 alpine-3.24、ubuntu-24.04、ubuntu-26.04 三個平台都實測 `[OK]`，每個場地連跑兩次 `mksctl install` 都 exit 0。base、ntp、docker 走 `pkg_install`，helm 與 kubelinter 走下載路徑。
-- Actions 的 `release.yml` 在 `feat/slice` 合併前的最後一個 commit 上跑過，check 與 smoke（podman、lxc、vm）全綠；build 與 release 照設計只在 tag 上跑，所以是 skipped。實測：https://github.com/flysangel/mksctl/actions/runs/40319610488
+- 計畫 1（垂直切片）與計畫 2 的引擎前置（A 段）已在 main。計畫 2 的配方（B 段）已搬進 `recipes/`，只有 k8s 配方延後（見〈待辦〉）。
+- 配方的實測狀態：podman 層的配方不留紀錄，用 `task test:recipe -- <配方>` 重跑。lxc 與 vm 層的紀錄在 `tests/verified.conf`，用 `task check:verified` 查是否齊全、相符、未過期。配方清單用 `mksctl list --all` 查。
+- Actions 的 `release.yml`：計畫 2 B 段 merge 前的最後一次 push，check 與 smoke 全綠（https://github.com/flysangel/mksctl/actions/runs/41266636324）。build 與 release 照設計只在 tag 上跑。
 - 未驗證：
   - `weekly.yml` 沒有在 Actions 跑過。workflow 要在 main 才能手動觸發，合併後第一件事是觸發一次。
   - `mksctl update` 的 attestation 驗證沒有真實 release 樣本，只有 fixture 測試。首次 release 後要實跑一次。
-- `tests/verified.conf` 的 lxc 與 vm 紀錄已過期（內容雜湊涵蓋 Go 原始碼，引擎修改之後讓它失效），`task check:verified` 會失敗。發版前要在本機重跑受影響配方。
+- 改了引擎、配方、`platforms/` 或 `pkgmap.yaml` 後，`tests/verified.conf` 的紀錄會過期，發版前要重跑受影響配方。
 - 還沒有 tag。
 
 ## 2. 待辦
 
-### 計畫 2：其餘配方
+### 計畫 2：剩餘項目
 
-- 搬其餘配方。範圍是舊腳本合併兩發行版後的全部配方，只有 `ubuntu/app/mks` 不搬。
-- 替 gitkraken、postman 這類上游不提供雜湊的檔，用 `task trust:refresh` 記下自己驗證的雜湊。
-- 聚合器 `aconfig` 與 `k8stools`，以及 xfce、lxqt 加 XRDP。
+- 容器裡裝不了 aconfig、xrdp、xfce、lxqt：它們的步驟 `requires: kernel`，容器平台不提供 kernel，安裝前檢查會整個擋下，不會略過那一步。images 的 rdp 映像（容器建置裡跑 xfce、lxqt）因此無法直接改用 mksctl。由使用者決定做法：
+  - (a) resolver 或 preflight 遇到 steps 裡平台不支援的配方時略過，不擋。要改 `internal/`，動手前先通知 provision-windows。
+  - (b) 另做一個不含 kernel 步驟的容器用聚合器。
+- k8s 配方：等計畫 4（Windows）merge 進 main 後，從新的 main 另開分支做。`apt_sources` 樣板要多一個 minor 版本變數（例如 `{{.Minor}}`，由 `latest:` 的版本取 `vX.Y`），要改 `internal/aptsource` 的 expand、FindConflicts、FetchKey 與 `internal/install/install.go` 的呼叫端。動 `internal/` 前先通知 provision-windows。
+- `apt_sources` 支援 dearmor，讓金鑰路徑能對齊官方的 `.gpg` keyring。
+- `apt_sources` 支援 pin 檔。xfce 目前在 install 裡自己寫 `/etc/apt/preferences.d/mozilla`。
+- 移除沒人用的 `jetbrains-iic` provider（`internal/upstream`）。動 `internal/` 前先通知 provision-windows。
+- `pkgmap.yaml` 的 `openssh-client` 登記等於原樣對照，可以刪。
+- vscode 配方裡 `foxundermoon.shell-format` 的釘版理由待查（見 `recipes/vscode/recipe.sh` 註解）。
 
 ### 計畫 3：介面與發版
 

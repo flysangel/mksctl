@@ -62,6 +62,11 @@ tasks:
       - bash tests/test_check_verified.sh
       - bash tests/test_trust_refresh.sh
 
+  test:xrdp-account:
+    desc: "[開發] 驗 xrdp 重跑不會重設既有帳號的密碼（podman，離線測試之外的一條）"
+    cmds:
+      - bash tests/test_xrdp_account.sh
+
   check:verified:
     desc: "[開發] 查 lxc 與 vm 配方的已驗紀錄是否齊全、雜湊相符、7 天內（本機工具，發版 workflow 不用）"
     cmds:

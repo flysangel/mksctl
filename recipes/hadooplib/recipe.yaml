@@ -1,0 +1,40 @@
+# hadooplib：編譯 Hadoop 原生程式碼所需的建置工具與開發函式庫。只有 ubuntu 提供 apt，alpine 自動略過。
+venue: podman
+requires:
+  - apt
+packages:
+  # 核心建置工具
+  - build-essential
+  - autoconf
+  - automake
+  - libtool
+  - cmake
+  - zlib1g-dev
+  - pkg-config
+  - libssl-dev
+  - libsnappy-dev
+  - bzip2
+  - libbz2-dev
+  - libjansson-dev
+  - fuse
+  - libfuse-dev
+  - liblzo2-dev
+  - lzop
+  # Hadoop 專屬開發函式庫
+  - maven
+  - ant
+  - gcc
+  - g++
+  - libkrb5-dev
+  - libffi-dev
+  - libsasl2-dev
+  - libsasl2-modules-gssapi-mit
+  - libsqlite3-dev
+  - libtidy-dev
+  - libxml2-dev
+  - libxslt-dev
+  - make
+  - libldap2-dev
+  - python3-dev
+  - python3-setuptools
+  - libgmp3-dev

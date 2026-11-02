@@ -1,0 +1,4 @@
+venue: podman
+packages:
+  - openjdk-8-jdk
+  - openjdk-8-jre

@@ -1,0 +1,13 @@
+venue: podman
+needs:
+  - kubectl
+packages:
+  - tar
+  - git
+latest:
+  github: kubernetes-sigs/krew
+artifacts:
+  - id: krew
+    url: https://github.com/kubernetes-sigs/krew/releases/download/{{.Version}}/krew-linux_{{.Arch}}.tar.gz
+    checksum:
+      file: "{{.URL}}.sha256"

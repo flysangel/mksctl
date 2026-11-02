@@ -1,0 +1,27 @@
+# 聚合器：只有 steps，依平台層列出要先跑的配方，照舊 aconfig.txt 的順序。
+# 舊腳本的 apt 前置是平台層的準備步驟，不是配方。
+# enableSwap 刻意不串，與舊 aconfig 相同。
+# 層名 apk 涵蓋所有 alpine 版本，ubuntu 涵蓋所有 ubuntu 版本。
+# ubuntu 不串 bigred；alpine 串，且排在 sudopw 前面。
+# ubuntu 的 netplan 不在舊 aconfig.txt 裡，是這次新增，排在鏈尾。
+venue: vm
+steps:
+  apk:
+    - base
+    - bigred
+    - ipv46
+    - ntp
+    - rclocal
+    - sshenv
+    - sudopw
+  ubuntu:
+    - base
+    - disableCloudinit
+    - disableSwap
+    - ipv46
+    - locale
+    - ntp
+    - rclocal
+    - sshenv
+    - sudopw
+    - netplan

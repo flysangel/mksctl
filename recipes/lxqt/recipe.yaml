@@ -1,0 +1,13 @@
+# 桌面環境 lxqt：lxqt-core 加 xrdp，遠端桌面用。只有 ubuntu 提供 desktop 能力，alpine 自動略過。
+# 帳號、xrdp 與輸入法設定在 xrdp 配方，params 也在那裡；本配方 needs xrdp。
+# 舊版最後會裝 MKS（zenity 佈建選單）；MKS 不搬進 mksctl，所以這裡不裝。
+venue: vm
+needs:
+  - xrdp
+requires:
+  - apt
+  - desktop
+packages:
+  - lxqt-core
+  - lxqt-theme-debian
+  - openbox
