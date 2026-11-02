@@ -90,6 +90,21 @@ jobs:
           cd out
           sha256sum mksctl-linux-amd64 >checksums.txt
           cat checksums.txt
+      - name: 檢查執行檔不超過 install.sh 的上限
+        run: |
+          # 上限的正本是 bin/install.sh 的 MAX_BIN_BYTES。超過時 install.sh 會拒收，不能發這一版。
+          line="$(grep -E '^MAX_BIN_BYTES=' bin/install.sh)"
+          if [[ ! "${line}" =~ ^MAX_BIN_BYTES=\$\(\(([0-9]+)\ \<\<\ ([0-9]+)\)\)$ ]]; then
+            echo "Error: bin/install.sh 沒有 MAX_BIN_BYTES=\$((<數字> << <數字>)) 這一行" >&2
+            exit 1
+          fi
+          max=$((BASH_REMATCH[1] << BASH_REMATCH[2]))
+          size="$(stat -c %s out/mksctl-linux-amd64)"
+          if ((size > max)); then
+            echo "Error: mksctl-linux-amd64 有 ${size} bytes，超過 install.sh 的上限 ${max} bytes" >&2
+            exit 1
+          fi
+          echo "Info: mksctl-linux-amd64 有 ${size} bytes，上限 ${max} bytes"
       - uses: actions/attest-build-provenance@v2
         with:
           subject-path: out/mksctl-linux-amd64
