@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/flysangel/mksctl/internal/platform"
 	"github.com/flysangel/mksctl/internal/recipe"
+	"github.com/flysangel/mksctl/internal/upstream"
 )
 
 const (
@@ -396,7 +396,11 @@ func writeAtomic(path string, data []byte) error {
 	return os.Rename(tmp.Name(), path)
 }
 
+// keyLimit 是 apt 金鑰的上限。ASCII armor 的金鑰只有數 KB。
+const keyLimit = 1 << 20
+
 // FetchKey 下載金鑰到 dest，原樣存放（不論 ASCII-armored 或二進位）。
+// 金鑰超過 keyLimit 時報錯，不截斷：截斷的金鑰寫進去，apt 只會給出誤導的簽章錯誤。
 // install.Run 在第 3 步呼叫它，把金鑰放進這次的暫存目錄：網址壞了在檢查階段就會發現，
 // 不必等到第 5 步已經寫了別的來源才失敗。失敗時不留下檔案。
 func FetchKey(ctx context.Context, s recipe.AptSource, p platform.Platform, client *http.Client, dest string) error {
@@ -416,7 +420,10 @@ func FetchKey(ctx context.Context, s recipe.AptSource, p platform.Platform, clie
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("aptsource: 下載金鑰失敗：%s 回 %s", keyURL, resp.Status)
 	}
-	key, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err := upstream.CheckLength(resp, keyLimit); err != nil {
+		return fmt.Errorf("aptsource: 下載金鑰失敗：%s：%w", keyURL, err)
+	}
+	key, err := upstream.ReadLimited(resp.Body, keyLimit)
 	if err != nil {
 		return fmt.Errorf("aptsource: 讀取金鑰失敗：%w", err)
 	}

@@ -1,6 +1,7 @@
 package aptsource
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/flysangel/mksctl/internal/platform"
 	"github.com/flysangel/mksctl/internal/recipe"
+	"github.com/flysangel/mksctl/internal/upstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -257,4 +259,18 @@ func TestFindConflictsSourcesListCommentOnly(t *testing.T) {
 	cs, err := FindConflicts(root, dockerSource(), ubuntu)
 	require.NoError(t, err)
 	assert.Empty(t, cs)
+}
+
+// 超過上限的金鑰要報錯，不能截斷後照樣寫入。
+func TestFetchKeyOverLimitFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("k"), keyLimit+1))
+	}))
+	defer srv.Close()
+	s := dockerSource()
+	s.KeyURL = srv.URL + "/gpg"
+	dest := filepath.Join(t.TempDir(), "docker.key")
+	err := FetchKey(context.Background(), s, ubuntu, srv.Client(), dest)
+	require.ErrorIs(t, err, upstream.ErrTooLarge)
+	assert.NoFileExists(t, dest)
 }
