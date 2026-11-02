@@ -183,4 +183,27 @@ else
   bad "腳本被截斷（只餵前半段）時什麼都不執行（請求數 ${before} → ${after}）"
 fi
 
+root="${W}/root-http"
+mkdir -p "${root}"
+before="$(requests "${http_log}")"
+rc=0
+out="$(MKSCTL_SYSROOT="${root}" bash "${script}" --base-url "${http_base}" 2>&1)" || rc=$?
+after="$(requests "${http_log}")"
+if ((rc == 1 && before == after)) && [[ -z "$(ls -A "${root}")" ]]; then
+  ok "--base-url 是 http:// 時 exit 1 且不送請求"
+else
+  bad "--base-url 是 http:// 時 exit 1 且不送請求（rc=${rc}，請求數 ${before} → ${after}）：${out}"
+fi
+
+root="${W}/root-redir"
+mkdir -p "${root}/usr/local/bin"
+printf 'old\n' >"${root}/usr/local/bin/mksctl"
+rc=0
+out="$(MKSCTL_SYSROOT="${root}" bash "${script}" --base-url "${base}/to-http" 2>&1)" || rc=$?
+if ((rc == 1)) && [[ "$(cat "${root}/usr/local/bin/mksctl")" == "old" ]]; then
+  ok "https 轉址到 http 時 exit 1 且目標檔不變"
+else
+  bad "https 轉址到 http 時 exit 1 且目標檔不變（rc=${rc}）：${out}"
+fi
+
 exit "${fail}"

@@ -1,17 +1,20 @@
 #!/bin/bash
 # install.sh — 從 GitHub release 下載 mksctl，比對 checksums.txt 後裝到 /usr/local/bin/mksctl
-# 驅動：curl -fsSL https://github.com/flysangel/mksctl/releases/latest/download/install.sh | sudo bash
+# 驅動：curl --proto '=https' --tlsv1.2 -fsSL https://github.com/flysangel/mksctl/releases/latest/download/install.sh | sudo bash
 set -euo pipefail
 
 # 整支包在 main() 裡，最後一行才呼叫：管線中途斷線時，bash 讀到的是不完整的函式定義，
 # 會以語法錯誤結束，不會只跑前半段。
-# 指定版本：curl -fsSL https://github.com/flysangel/mksctl/releases/download/vX.Y.Z/install.sh | sudo bash -s -- --tag vX.Y.Z
+# 指定版本：curl --proto '=https' --tlsv1.2 -fsSL https://github.com/flysangel/mksctl/releases/download/vX.Y.Z/install.sh | sudo bash -s -- --tag vX.Y.Z
 # 使用者的選擇只走參數，不走環境變數：sudo 預設會清掉環境變數。
 # MKSCTL_SYSROOT 只給 tests/test_install.sh 用：落地路徑前加上它，並略過 root 檢查。
 
 ASSET="mksctl-linux-amd64"
 DEFAULT_BASE="https://github.com/flysangel/mksctl/releases"
-USAGE="usage: install.sh [--tag vX.Y.Z] [--base-url <URL>]"
+USAGE="usage: install.sh [--tag vX.Y.Z] [--base-url <https://...>]"
+# 只走 https：install.sh 不驗 attestation，真實性只靠 TLS。
+# --proto 也管轉址，https 轉 http 會被拒（實測 curl 8.5.0）。
+CURL_OPTS=(-fsSL --proto '=https' --tlsv1.2 --retry 5 --retry-delay 2)
 
 # 給 trap 用：下載暫存目錄與落地前的暫存檔
 W=""
@@ -58,6 +61,10 @@ main() {
     echo "Error: --tag 要寫成 vX.Y.Z：${tag}" >&2
     return 1
   fi
+  if [[ "${base}" != https://* ]]; then
+    echo "Error: --base-url 只收 https://：${base}" >&2
+    return 1
+  fi
 
   sysroot="${MKSCTL_SYSROOT:-}"
   if [[ -z "${sysroot}" ]] && ((EUID != 0)); then
@@ -82,11 +89,11 @@ main() {
   trap cleanup EXIT
 
   echo "Info: 下載 ${url}/${ASSET}"
-  curl -fsSL --retry 5 --retry-delay 2 -o "${W}/${ASSET}" "${url}/${ASSET}" || {
+  curl "${CURL_OPTS[@]}" -o "${W}/${ASSET}" "${url}/${ASSET}" || {
     echo "Error: 下載 ${url}/${ASSET} 失敗" >&2
     return 1
   }
-  curl -fsSL --retry 5 --retry-delay 2 -o "${W}/checksums.txt" "${url}/checksums.txt" || {
+  curl "${CURL_OPTS[@]}" -o "${W}/checksums.txt" "${url}/checksums.txt" || {
     echo "Error: 下載 ${url}/checksums.txt 失敗" >&2
     return 1
   }
