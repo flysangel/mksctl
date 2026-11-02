@@ -137,10 +137,14 @@ main() {
   mkdir -p "${dest_dir}"
   TMP_DEST="${dest_dir}/.mksctl.new.$$"
   install -m 0755 "${W}/${ASSET}" "${TMP_DEST}"
+  # 換檔前先跑一次新檔：架構不符或目錄掛成 noexec 時，舊檔留著。
+  version="$("${TMP_DEST}" version)" || {
+    echo "Error: 新的 mksctl 執行 version 失敗，沒有安裝" >&2
+    return 1
+  }
   mv -f "${TMP_DEST}" "${dest_dir}/mksctl"
   TMP_DEST=""
 
-  version="$("${dest_dir}/mksctl" version)"
   echo "Success: mksctl ${version} 已安裝到 /usr/local/bin/mksctl"
 }
 

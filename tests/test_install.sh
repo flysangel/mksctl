@@ -268,4 +268,20 @@ else
   bad "bin/install.sh 沒有 MAX_BIN_BYTES=\$((<數字> << <數字>)) 這一行"
 fi
 
+# v0.0.5 的執行檔雜湊對，但跑不起來，模擬架構不符或 noexec 掛載
+dir="${srv}/download/v0.0.5"
+mkdir -p "${dir}"
+printf '#!/bin/sh\nexit 1\n' >"${dir}/mksctl-linux-amd64"
+(cd "${dir}" && sha256sum mksctl-linux-amd64 >checksums.txt)
+root="${W}/root-broken"
+mkdir -p "${root}/usr/local/bin"
+printf 'old\n' >"${root}/usr/local/bin/mksctl"
+rc=0
+out="$(MKSCTL_SYSROOT="${root}" bash "${script}" --base-url "${base}" --tag v0.0.5 2>&1)" || rc=$?
+if ((rc == 1)) && [[ "$(cat "${root}/usr/local/bin/mksctl")" == "old" ]] && [[ "$(ls -A "${root}/usr/local/bin")" == "mksctl" ]]; then
+  ok "新檔跑不起來時 exit 1、目標檔不變且不留暫存檔"
+else
+  bad "新檔跑不起來時 exit 1、目標檔不變且不留暫存檔（rc=${rc}）：${out}"
+fi
+
 exit "${fail}"
