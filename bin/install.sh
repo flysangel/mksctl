@@ -31,7 +31,7 @@ cleanup() {
 
 main() {
   local tag="" base="${DEFAULT_BASE}"
-  local sysroot dest_dir url line version cmd
+  local sysroot dest_dir url line version cmd os arch
 
   while (($# > 0)); do
     case "$1" in
@@ -77,6 +77,13 @@ main() {
       return 1
     }
   done
+  # release 只出 linux/amd64。下載前就擋，其他架構不必等到執行新檔才失敗。
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  if [[ "${os}" != "Linux" || "${arch}" != "x86_64" ]]; then
+    echo "Error: mksctl 只支援 linux/amd64，這台是 ${os}/${arch}" >&2
+    return 1
+  fi
 
   if [[ -n "${tag}" ]]; then
     url="${base}/download/${tag}"

@@ -206,4 +206,28 @@ else
   bad "https 轉址到 http 時 exit 1 且目標檔不變（rc=${rc}）：${out}"
 fi
 
+# PATH 前面放一支假的 uname，模擬 arm64 的機器
+fake="${W}/fake-arm64"
+mkdir -p "${fake}"
+cat >"${fake}/uname" <<'SH'
+#!/bin/sh
+case "$1" in
+-m) echo aarch64 ;;
+*) echo Linux ;;
+esac
+SH
+chmod +x "${fake}/uname"
+root="${W}/root-arm64"
+mkdir -p "${root}/usr/local/bin"
+printf 'old\n' >"${root}/usr/local/bin/mksctl"
+before="$(requests "${log}")"
+rc=0
+out="$(PATH="${fake}:${PATH}" MKSCTL_SYSROOT="${root}" bash "${script}" --base-url "${base}" 2>&1)" || rc=$?
+after="$(requests "${log}")"
+if ((rc == 1 && before == after)) && [[ "$(cat "${root}/usr/local/bin/mksctl")" == "old" && "${out}" == *"Linux/aarch64"* ]]; then
+  ok "不是 linux/amd64 時 exit 1、不送請求且目標檔不變"
+else
+  bad "不是 linux/amd64 時 exit 1、不送請求且目標檔不變（rc=${rc}，請求數 ${before} → ${after}）：${out}"
+fi
+
 exit "${fail}"
