@@ -50,7 +50,7 @@ func retry(ctx context.Context, fn func() (string, error)) (string, error) {
 // requestErr 包裝 hc.Do 的錯誤。使用者取消、憑證錯誤與被擋的降級轉址不重試，其餘當成暫時性錯誤。
 func requestErr(ctx context.Context, what string, err error) error {
 	err = fmt.Errorf("upstream: 查 %s：%w", what, err)
-	if ctx.Err() != nil || untrusted(err) {
+	if ctx.Err() != nil || IsUntrusted(err) {
 		return err
 	}
 	return transientErr{err}
@@ -65,9 +65,9 @@ func statusErr(u string, code int) error {
 	return err
 }
 
-// untrusted 判斷 err 是不是「連上了，但對方不可信」：憑證驗不過或 https 被轉到非 https。
+// IsUntrusted 判斷 err 是不是「連上了，但對方不可信」：憑證驗不過或 https 被轉到非 https。
 // captive portal（強制登入頁）攔截 https 時就是這種錯誤。
-func untrusted(err error) bool {
+func IsUntrusted(err error) bool {
 	if errors.Is(err, ErrInsecureRedirect) {
 		return true
 	}
@@ -84,7 +84,7 @@ func untrusted(err error) bool {
 //   - 憑證錯誤與被擋的降級轉址：連線被攔截。
 //   - 使用者取消。
 func IsUnreachable(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) || untrusted(err) {
+	if err == nil || errors.Is(err, context.Canceled) || IsUntrusted(err) {
 		return false
 	}
 	var opErr *net.OpError

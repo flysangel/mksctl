@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -649,6 +650,28 @@ func TestDownloadStallTimesOut(t *testing.T) {
 	_, err := f.Get(context.Background(), recipe.Artifact{ID: "tool", URL: srv.URL + "/tool"}, "v1")
 	require.ErrorIs(t, err, upstream.ErrStalled)
 	assert.Less(t, time.Since(start), 5*time.Second)
+	dirEmpty(t, f.Dir)
+}
+
+// 憑證錯誤代表連線被攔截（captive portal 或中間人），重試不會變好，只撥號一次。
+func TestDownloadNoRetryOnCertError(t *testing.T) {
+	oldDelay := retryDelay
+	retryDelay = time.Millisecond
+	t.Cleanup(func() { retryDelay = oldDelay })
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	t.Cleanup(srv.Close)
+	var dials atomic.Int32
+	hc := upstream.NewHTTPClient()
+	d := &net.Dialer{}
+	hc.Transport.(*http.Transport).DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dials.Add(1)
+		return d.DialContext(ctx, network, addr)
+	}
+	f := &Fetcher{Upstream: &upstream.Client{HTTP: hc}, Dir: t.TempDir(), AllowUnverified: true}
+	_, err := f.Get(context.Background(), recipe.Artifact{ID: "tool", URL: srv.URL + "/tool"}, "v1")
+	require.Error(t, err)
+	assert.True(t, upstream.IsUntrusted(err), err)
+	assert.Equal(t, int32(1), dials.Load())
 	dirEmpty(t, f.Dir)
 }
 

@@ -416,7 +416,12 @@ func (f *Fetcher) once(ctx context.Context, u string, h http.Header, limit int64
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return transientErr{fmt.Errorf("fetch: 下載 %s：%w", u, err)}
+		err = fmt.Errorf("fetch: 下載 %s：%w", u, err)
+		// 憑證錯誤與被擋的降級轉址代表連線被攔截，重試不會變好。
+		if upstream.IsUntrusted(err) {
+			return err
+		}
+		return transientErr{err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
