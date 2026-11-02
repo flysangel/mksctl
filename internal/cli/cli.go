@@ -110,6 +110,7 @@ func defaultEnv() env {
 		sysroot:    sysroot,
 		now:        time.Now,
 		fsys:       mksctl.FS,
+		http:       upstream.NewHTTPClient(),
 		version:    Version,
 	}
 }

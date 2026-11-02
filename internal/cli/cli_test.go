@@ -579,3 +579,12 @@ func TestTrustRecordWriteMerges(t *testing.T) {
 		"zzz/old:\n    url: http://x/old\n    size: 1\n    sha256: " + strings.Repeat("a", 64) + "\n"
 	assert.Equal(t, want, string(got))
 }
+
+// 正式環境要用 upstream 的 hardened client，不能退回 http.DefaultClient：
+// DefaultClient 沒有等標頭的逾時，也會跟著 https 轉到 http。
+func TestDefaultEnvHasHardenedClient(t *testing.T) {
+	c := defaultEnv().http
+	require.NotNil(t, c)
+	assert.NotSame(t, http.DefaultClient, c)
+	assert.NotNil(t, c.CheckRedirect)
+}
