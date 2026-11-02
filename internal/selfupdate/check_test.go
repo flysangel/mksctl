@@ -47,7 +47,7 @@ func TestNotifyPrintsInstallLine(t *testing.T) {
 	srv := latestServer(t, "v0.2.0")
 	var errOut bytes.Buffer
 	Notify(context.Background(), "v0.1.0", &upstream.Client{GitHubBase: srv.URL}, &errOut)
-	assert.Equal(t, "Info: 有新版 v0.2.0，執行 curl -fsSL https://github.com/flysangel/mksctl/releases/latest/download/install.sh | sudo bash\n", errOut.String())
+	assert.Equal(t, "Info: 有新版 v0.2.0，執行 curl --proto '=https' --tlsv1.2 -fsSL https://github.com/flysangel/mksctl/releases/latest/download/install.sh | sudo bash\n", errOut.String())
 }
 
 func TestNotifySilentWhenNotNewer(t *testing.T) {

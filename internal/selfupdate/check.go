@@ -28,7 +28,7 @@ func Notify(ctx context.Context, current string, c *upstream.Client, stderr io.W
 	if err != nil || !newer(latest, current) {
 		return
 	}
-	fmt.Fprintf(stderr, "Info: 有新版 %s，執行 curl -fsSL https://github.com/%s/releases/latest/download/install.sh | sudo bash\n", latest, Repo)
+	fmt.Fprintf(stderr, "Info: 有新版 %s，執行 curl --proto '=https' --tlsv1.2 -fsSL https://github.com/%s/releases/latest/download/install.sh | sudo bash\n", latest, Repo)
 }
 
 // newer 只比 vX.Y.Z 三段數字。任一邊看不懂時回 false：
