@@ -43,7 +43,10 @@ func (c *Client) body(ctx context.Context, u string) (string, error) {
 }
 
 func (c *Client) getBody(ctx context.Context, u string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	// 讀到一半卡住時由看門狗中止。client 沒有整體逾時，少了它會一直等。
+	wd := NewWatchdog(ctx, idleTimeout)
+	defer wd.Stop()
+	req, err := http.NewRequestWithContext(wd.Context(), http.MethodGet, u, nil)
 	if err != nil {
 		return "", err
 	}
@@ -55,8 +58,8 @@ func (c *Client) getBody(ctx context.Context, u string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", statusErr(u, resp.StatusCode)
 	}
-	b, err := ReadLimited(resp.Body, bodyLimit)
-	if err != nil {
+	b, err := ReadLimited(wd.Reader(resp.Body), bodyLimit)
+	if err := wd.Err(err); err != nil {
 		return "", readErr(ctx, u, err)
 	}
 	return string(b), nil

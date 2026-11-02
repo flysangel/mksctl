@@ -167,7 +167,10 @@ func (c *Client) latestGitHub(ctx context.Context, repo string) (string, error) 
 const versionLimit = 4096
 
 func (c *Client) latestURL(ctx context.Context, u string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	// 讀到一半卡住時由看門狗中止。client 沒有整體逾時，少了它會一直等。
+	wd := NewWatchdog(ctx, idleTimeout)
+	defer wd.Stop()
+	req, err := http.NewRequestWithContext(wd.Context(), http.MethodGet, u, nil)
 	if err != nil {
 		return "", err
 	}
@@ -180,8 +183,8 @@ func (c *Client) latestURL(ctx context.Context, u string) (string, error) {
 		return "", statusErr(u, resp.StatusCode)
 	}
 	// 版本檔只有一行，限制讀取量，避免網址填錯時把整個網頁讀進來。
-	b, err := ReadLimited(resp.Body, versionLimit)
-	if err != nil {
+	b, err := ReadLimited(wd.Reader(resp.Body), versionLimit)
+	if err := wd.Err(err); err != nil {
 		return "", readErr(ctx, u, err)
 	}
 	v := strings.TrimSpace(string(b))

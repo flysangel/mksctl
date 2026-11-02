@@ -109,6 +109,7 @@ func TestLatestURLOverLimitFails(t *testing.T) {
 	c := &Client{HTTP: srv.Client()}
 	_, err := c.Latest(context.Background(), LatestSpec{URL: srv.URL + "/v"})
 	require.ErrorIs(t, err, ErrTooLarge)
+	assert.Equal(t, 1, srv.hits("/v"), "超過上限不重試")
 }
 
 func TestBodyOverLimitFails(t *testing.T) {
@@ -118,6 +119,48 @@ func TestBodyOverLimitFails(t *testing.T) {
 	c := &Client{HTTP: srv.Client()}
 	_, err := c.body(context.Background(), srv.URL+"/dl")
 	require.ErrorIs(t, err, ErrTooLarge)
+	assert.Equal(t, 1, srv.hits("/dl"), "超過上限不重試")
+}
+
+// stallServer 送出標頭與一點內文後就不再送資料。
+func stallServer(t *testing.T) *countingServer {
+	t.Helper()
+	return newCountingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write([]byte("1."))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+}
+
+func fastIdle(t *testing.T) {
+	t.Helper()
+	old := idleTimeout
+	idleTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { idleTimeout = old })
+}
+
+// 查最新版的小檔讀到一半卡住時，也要由看門狗中止，不能一直等。
+func TestLatestURLStallTimesOut(t *testing.T) {
+	fastRetry(t)
+	fastIdle(t)
+	srv := stallServer(t)
+	c := &Client{HTTP: srv.Client()}
+	start := time.Now()
+	_, err := c.Latest(context.Background(), LatestSpec{URL: srv.URL + "/v"})
+	require.ErrorIs(t, err, ErrStalled)
+	assert.Less(t, time.Since(start), 5*time.Second)
+}
+
+func TestBodyStallTimesOut(t *testing.T) {
+	fastRetry(t)
+	fastIdle(t)
+	srv := stallServer(t)
+	c := &Client{HTTP: srv.Client()}
+	start := time.Now()
+	_, err := c.body(context.Background(), srv.URL+"/dl")
+	require.ErrorIs(t, err, ErrStalled)
+	assert.Less(t, time.Since(start), 5*time.Second)
 }
 
 func TestWatchdogStopsStalledRead(t *testing.T) {

@@ -125,6 +125,25 @@ func TestLatestNoRetryOnCertError(t *testing.T) {
 	assert.Equal(t, int32(1), dials.Load())
 }
 
+// 被擋的降級轉址也代表連線被攔截，不重試。
+func TestLatestNoRetryOnInsecureRedirect(t *testing.T) {
+	fastRetry(t)
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("1.2.3"))
+	}))
+	t.Cleanup(plain.Close)
+	var hits atomic.Int32
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Redirect(w, r, plain.URL+"/v", http.StatusFound)
+	}))
+	t.Cleanup(secure.Close)
+	c := &Client{HTTP: tlsClient(t, secure, HeaderTimeout)}
+	_, err := c.Latest(context.Background(), LatestSpec{URL: secure.URL + "/v"})
+	require.ErrorIs(t, err, ErrInsecureRedirect)
+	assert.Equal(t, int32(1), hits.Load())
+}
+
 // timeoutErr 模擬 net.Error 的逾時。
 type timeoutErr struct{}
 

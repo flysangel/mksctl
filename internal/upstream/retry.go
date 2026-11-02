@@ -17,6 +17,9 @@ const attempts = 3
 // retryDelay 是重試間隔的基數，第 n 次重試等 n 倍。
 var retryDelay = 200 * time.Millisecond
 
+// idleTimeout 是查最新版時讀內文的閒置上限。測試改短。
+var idleTimeout = IdleTimeout
+
 // transientErr 標記值得重試的錯誤：連線錯誤、5xx 與 429。
 type transientErr struct{ error }
 
