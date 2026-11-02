@@ -5,21 +5,14 @@
 - 標準驗證路徑：`task lint`、`task test`、`task test:recipe -- <配方>`、`task check:verified`。
 - 計畫 1（垂直切片）與計畫 2 的引擎前置（A 段）已在 main。計畫 2 的配方（B 段）已搬進 `recipes/`，只有 k8s 配方延後（見〈待辦〉）。
 - 配方的實測狀態：podman 層的配方不留紀錄，用 `task test:recipe -- <配方>` 重跑。lxc 與 vm 層的紀錄在 `tests/verified.conf`，用 `task check:verified` 查是否齊全、相符、未過期。配方清單用 `mksctl list --all` 查。
-- Actions 的 `release.yml`：計畫 1 的最後一個 commit 上 check 與 smoke 全綠（https://github.com/flysangel/mksctl/actions/runs/40319610488）。B 段之後的 commit 還沒在 Actions 跑過。build 與 release 照設計只在 tag 上跑。
+- Actions 的 `release.yml`：計畫 2 B 段 merge 前的最後一次 push，check 與 smoke 全綠（https://github.com/flysangel/mksctl/actions/runs/41266636324）。build 與 release 照設計只在 tag 上跑。
 - 未驗證：
   - `weekly.yml` 沒有在 Actions 跑過。workflow 要在 main 才能手動觸發，合併後第一件事是觸發一次。
   - `mksctl update` 的 attestation 驗證沒有真實 release 樣本，只有 fixture 測試。首次 release 後要實跑一次。
 - 改了引擎、配方、`platforms/` 或 `pkgmap.yaml` 後，`tests/verified.conf` 的紀錄會過期，發版前要重跑受影響配方。
 - 還沒有 tag。
 
-## 2. 進行中
-
-分支 `feat/recipes`：搬計畫 2 的配方。
-
-- 做到哪：B1 到 B10 完成；最終審查的修正已做完（含補搬 gpicview、hadooplib、vlc），受影響配方的實測紀錄已重驗。
-- 下一步：推分支讓 Actions 跑三層實測，全綠後改〈目前狀態〉、刪掉本節，再 merge 回 main。
-
-## 3. 待辦
+## 2. 待辦
 
 ### 計畫 2：剩餘項目
 
