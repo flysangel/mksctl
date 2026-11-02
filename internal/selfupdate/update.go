@@ -29,8 +29,18 @@ const (
 	// Issuer 是 GitHub Actions 的 OIDC 簽發者。
 	Issuer = "https://token.actions.githubusercontent.com"
 
-	// smallLimit 限制 checksums.txt 與 API 回應的大小，網址填錯時不讀進整個大檔。
+	// smallLimit 限制 attestation API 回應的大小，網址填錯時不讀進整個大檔。
 	smallLimit = 16 << 20
+	// checksumsLimit 是 checksums.txt 的上限，與 bin/install.sh 下載同一個檔時的上限相同。
+	checksumsLimit = 64 << 10
+)
+
+var (
+	// binaryLimit 是執行檔的上限，必須等於 bin/install.sh 的 MAX_BIN_BYTES（TestBinaryLimitMatchesInstallSh 檢查）。
+	// 做成變數只為了讓測試改小。
+	binaryLimit int64 = 128 << 20
+	// idleTimeout 是下載中途多久沒有新資料就中止。做成變數只為了讓測試改小。
+	idleTimeout = upstream.IdleTimeout
 )
 
 // Verifier 驗一份 sigstore bundle 是否簽了這個 sha256。測試換成假的，不必準備真的簽章材料。
@@ -109,13 +119,13 @@ func (u *Updater) Update(ctx context.Context, tag, current, dest string) (Result
 	}()
 
 	h := sha256.New()
-	if err := u.download(ctx, base+Asset, io.MultiWriter(tmp, h), -1); err != nil {
+	if err := u.download(ctx, base+Asset, io.MultiWriter(tmp, h), binaryLimit); err != nil {
 		return res, err
 	}
 	digest := h.Sum(nil)
 
 	var sums bytes.Buffer
-	if err := u.download(ctx, base+"checksums.txt", &sums, smallLimit); err != nil {
+	if err := u.download(ctx, base+"checksums.txt", &sums, checksumsLimit); err != nil {
 		return res, err
 	}
 	want, err := checksumFor(sums.Bytes(), Asset)
@@ -149,16 +159,23 @@ func validTag(tag string) bool {
 	return ok && strings.HasPrefix(tag, "v")
 }
 
-// download 把 url 的內容寫進 w。limit 小於 0 表示不限制大小。
+// download 把 url 的內容寫進 w，超過 limit bytes 就失敗。
 func (u *Updater) download(ctx context.Context, url string, w io.Writer, limit int64) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	return u.do(ctx, url, nil, w, limit)
+}
+
+// do 送出 GET 並把 body 寫進 w。超過 limit bytes 時回 upstream.ErrTooLarge，不截斷：
+// 截斷的 checksums.txt 只會換來誤導的「找不到雜湊」。中途 idleTimeout 沒有新資料就中止。
+func (u *Updater) do(ctx context.Context, url string, h http.Header, w io.Writer, limit int64) error {
+	wd := upstream.NewWatchdog(ctx, idleTimeout)
+	defer wd.Stop()
+	req, err := http.NewRequestWithContext(wd.Context(), http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	return u.do(req, url, w, limit)
-}
-
-func (u *Updater) do(req *http.Request, url string, w io.Writer, limit int64) error {
+	for k, v := range h {
+		req.Header[k] = v
+	}
 	resp, err := u.Client.HTTPClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("下載 %s：%w", url, err)
@@ -167,12 +184,16 @@ func (u *Updater) do(req *http.Request, url string, w io.Writer, limit int64) er
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("下載 %s：HTTP %d", url, resp.StatusCode)
 	}
-	var r io.Reader = resp.Body
-	if limit >= 0 {
-		r = io.LimitReader(resp.Body, limit)
-	}
-	if _, err := io.Copy(w, r); err != nil {
+	if err := upstream.CheckLength(resp, limit); err != nil {
 		return fmt.Errorf("下載 %s：%w", url, err)
+	}
+	// 多讀 1 byte 才分得出「剛好等於上限」與「超過上限」。
+	n, err := io.Copy(w, wd.Reader(io.LimitReader(resp.Body, limit+1)))
+	if err = wd.Err(err); err != nil {
+		return fmt.Errorf("下載 %s：%w", url, err)
+	}
+	if n > limit {
+		return fmt.Errorf("下載 %s：%w：超過 %d bytes", url, upstream.ErrTooLarge, limit)
 	}
 	return nil
 }
@@ -200,16 +221,13 @@ func checksumFor(data []byte, name string) (string, error) {
 // verifyAttestation 向 GitHub API 取這個 digest 的 attestation，任一份通過驗證就算過。
 func (u *Updater) verifyAttestation(ctx context.Context, digest []byte) error {
 	url := u.Client.APIBase() + "/repos/" + Repo + "/attestations/sha256:" + hex.EncodeToString(digest)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
+	h := http.Header{}
+	h.Set("Accept", "application/vnd.github+json")
 	if u.Client.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+u.Client.Token)
+		h.Set("Authorization", "Bearer "+u.Client.Token)
 	}
 	var body bytes.Buffer
-	if err := u.do(req, url, &body, smallLimit); err != nil {
+	if err := u.do(ctx, url, h, &body, smallLimit); err != nil {
 		return fmt.Errorf("取 attestation：%w", err)
 	}
 	var resp struct {

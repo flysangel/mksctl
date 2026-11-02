@@ -10,9 +10,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -229,6 +232,80 @@ func TestUpdateNoAttestation(t *testing.T) {
 	})
 	_, err := u.Update(context.Background(), "", "v0.1.0", dest)
 	require.Error(t, err)
+	assert.Zero(t, v.calls)
+	assertUnchanged(t, dest)
+}
+
+// binaryLimit 與 bin/install.sh 的 MAX_BIN_BYTES 必須相同：執行檔落在兩者之間時，
+// mksctl update 收、install.sh 拒收（或反過來）。release.yml 的閘門也讀同一行。
+func TestBinaryLimitMatchesInstallSh(t *testing.T) {
+	b, err := os.ReadFile("../../bin/install.sh")
+	require.NoError(t, err)
+	m := regexp.MustCompile(`(?m)^MAX_BIN_BYTES=\$\(\(([0-9]+) << ([0-9]+)\)\)$`).FindSubmatch(b)
+	require.NotNil(t, m, "bin/install.sh 找不到 MAX_BIN_BYTES=$((A << B)) 那一行")
+	base, err := strconv.ParseInt(string(m[1]), 10, 64)
+	require.NoError(t, err)
+	shift, err := strconv.ParseUint(string(m[2]), 10, 6)
+	require.NoError(t, err)
+	assert.Equal(t, base<<shift, binaryLimit)
+	assert.Equal(t, int64(128<<20), binaryLimit)
+}
+
+func setBinaryLimit(t *testing.T, n int64) {
+	t.Helper()
+	old := binaryLimit
+	binaryLimit = n
+	t.Cleanup(func() { binaryLimit = old })
+}
+
+func TestUpdateRejectsOversizeBinary(t *testing.T) {
+	setBinaryLimit(t, int64(len(newBinary))-1)
+	v := &fakeVerifier{}
+	_, u, dest := setup(t, v)
+	_, err := u.Update(context.Background(), "", "v0.1.0", dest)
+	require.ErrorIs(t, err, upstream.ErrTooLarge)
+	assert.Zero(t, v.calls)
+	assertUnchanged(t, dest)
+}
+
+// 剛好等於上限要收，與 install.sh 的 curl --max-filesize 同一個語意。
+func TestUpdateAllowsBinaryAtLimit(t *testing.T) {
+	setBinaryLimit(t, int64(len(newBinary)))
+	_, u, dest := setup(t, &fakeVerifier{})
+	_, err := u.Update(context.Background(), "", "v0.1.0", dest)
+	require.NoError(t, err)
+}
+
+func TestUpdateChecksumsOverLimitFails(t *testing.T) {
+	v := &fakeVerifier{}
+	srv, u, dest := setup(t, v)
+	srv.checksums = strings.Repeat("x", checksumsLimit) + "\n" + sum(newBinary) + "  mksctl-linux-amd64\n"
+	_, err := u.Update(context.Background(), "", "v0.1.0", dest)
+	require.ErrorIs(t, err, upstream.ErrTooLarge)
+	assert.Zero(t, v.calls)
+	assertUnchanged(t, dest)
+}
+
+func TestUpdateStalledDownloadFails(t *testing.T) {
+	old := idleTimeout
+	idleTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { idleTimeout = old })
+	v := &fakeVerifier{}
+	srv, u, dest := setup(t, v)
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flysangel/mksctl/releases/latest" {
+			http.Redirect(w, r, "/flysangel/mksctl/releases/tag/v0.2.0", http.StatusFound)
+			return
+		}
+		w.Header().Set("Content-Length", "1000")
+		_, _ = w.Write([]byte("part"))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+	start := time.Now()
+	_, err := u.Update(context.Background(), "", "v0.1.0", dest)
+	require.ErrorIs(t, err, upstream.ErrStalled)
+	assert.Less(t, time.Since(start), 5*time.Second)
 	assert.Zero(t, v.calls)
 	assertUnchanged(t, dest)
 }
