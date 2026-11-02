@@ -9,19 +9,19 @@
 安裝和更新是同一行。已經裝過的機器跑這一行，就更新到最新版：
 
 ```bash
-curl -fsSL https://github.com/flysangel/mksctl/releases/latest/download/install.sh | sudo bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/flysangel/mksctl/releases/latest/download/install.sh | sudo bash
 ```
 
 要回到舊版時，從該版的 release 下載 `install.sh`，再用 `--tag` 指定版本：
 
 ```bash
-curl -fsSL https://github.com/flysangel/mksctl/releases/download/vX.Y.Z/install.sh | sudo bash -s -- --tag vX.Y.Z
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/flysangel/mksctl/releases/download/vX.Y.Z/install.sh | sudo bash -s -- --tag vX.Y.Z
 ```
 
 cloud-init 沒有管線保護，先下載成檔案，再執行：
 
 ```bash
-curl -fsSL -o /tmp/install.sh https://github.com/flysangel/mksctl/releases/latest/download/install.sh
+curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/install.sh https://github.com/flysangel/mksctl/releases/latest/download/install.sh
 bash /tmp/install.sh
 ```
 
