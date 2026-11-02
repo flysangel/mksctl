@@ -151,6 +151,11 @@ GitHub 上游優先直連：版本號讀 `releases/latest` 的轉址，雜湊直
 | 不從 keyserver 抓 `NO_PUBKEY` 的金鑰 | 照 `NO_PUBKEY` 抓金鑰，等於信任任何能讓 apt 印出那個 key ID 的簽署者；抓下來另存一份 keyring，也會讓同一來源出現第二個 `Signed-By` 而起衝突。缺金鑰的來源一律寫成配方的 `apt_sources`。使用者決定 | 無程式擋 |
 | ubuntu 鏡像在平台層，只在要裝 apt 套件時寫 | 使用者決定用台灣鏡像並開 `-proposed`、`-backports`。只下載執行檔的安裝不改使用者的來源。鏡像用 http：容器沒有 ca-certificates 時，https 來源連 `apt-get update` 都做不了；完整性由 apt 驗 Release 簽章保證 | `internal/install` 的 `TestMirrorOnlyWhenPackagesNeeded` |
 | `apt_sources` 是否適用由平台能力決定 | 看有沒有 `apt` 能力，不看層名稱 | `internal/install` 的測試 |
+| 執行檔上限 128 MiB，三處共用一個值 | 正本是 `bin/install.sh` 的 `MAX_BIN_BYTES`。`internal/selfupdate` 的 `binaryLimit` 必須等於它，`release.yml` 的發版閘門也讀這一行，發版的執行檔超過上限時 job 失敗。三處用同一個 regex 讀這行，改寫法時三處一起改。代價：執行檔長過上限時，要改常數並發新版 | `internal/selfupdate` 的 `TestBinaryLimitMatchesInstallSh`；`release.yml` 的「檢查執行檔不超過 install.sh 的上限」 |
+| 其他下載的大小上限 | `checksums.txt` 上限 64 KiB（`install.sh` 與 `mksctl update` 相同）。`mksctl fetch` 的下載：trust 是第一個適用的來源時，上限是記錄的 `size`，所以 `trust/hashes.yaml` 每筆都要有 `size`；其餘上限 2 GiB，只防無限串流。小檔（checksum 檔、API 回應、apt 金鑰）有各自的上限，值看各套件的常數。超過上限一律報錯，不截斷，也不重試：上限是刻意設的，重下載也不會變小。上限含等於：大於上限才擋 | `internal/fetch`、`internal/selfupdate`、`internal/aptsource` 的上限測試；`LoadTrust` 擋缺 `size`；`tests/test_install.sh` |
+| 只走 https，拒收 https 轉非 https | `install.sh` 不驗 attestation，真實性只靠 TLS，所以 curl 加 `--proto '=https' --tlsv1.2`，`--base-url` 只收 `https://`。Go 端 `upstream.NewHTTPClient` 的 `CheckRedirect` 拒收 https 轉非 https：apt 金鑰與 trust 的檔也只靠 TLS 防中間人。README 與新版提示給使用者複製的 curl 也加同樣的旗標 | `internal/upstream` 的 `TestNewHTTPClientRejectsHTTPSToHTTPRedirect`；`tests/test_install.sh` 的 http 與轉址案例 |
+| 逾時分兩段：等標頭 30 秒、閒置 60 秒 | 等回應標頭的上限是 `upstream.HeaderTimeout`。下載中途超過 `upstream.IdleTimeout` 沒有新資料就中止，由 `upstream.Watchdog` 執行，`fetch` 與 `mksctl update` 共用。不設整體逾時：大檔在慢線上會超過任何固定值。看門狗觸發算暫時性錯誤，`fetch` 會重試。查最新版遇到暫時性錯誤（連線錯誤、5xx、429）也重試，憑證錯誤與被擋的轉址不重試。代價：封包被丟棄的離線情況下，每個配方要等完每次撥號逾時，共試 3 次 | `internal/upstream` 的 `TestWatchdogStopsStalledRead` 與重試測試；`internal/fetch` 的 `TestDownloadStallTimesOut`；`internal/selfupdate` 的 `TestUpdateStalledDownloadFails` |
+| `install.sh` 換檔前先跑一次新檔的 `version` | 新檔先裝成暫存檔並執行 `version`，失敗就不換檔，舊檔留著。這擋下架構不符與目錄掛成 noexec。下載前另查是不是 linux/amd64 | `tests/test_install.sh` |
 | 簽章公鑰釘在 `trust/keys/` | 從上游抓公鑰，等於信任能換掉檔案的人。代價是上游換金鑰要手動更新 | 無程式擋 |
 | sigstore 同時支援金鑰與 keyless | kube-linter 用 cosign 金鑰簽章，沒有憑證可比對 identity。兩者並存或皆無，載入時報錯 | `internal/recipe` 的 `Validate` |
 | guest agent 只在 init 在跑時裝並啟用 | 容器 build 沒有 init，裝了只是變胖或失敗。agent 安裝失敗只警告 | base 配方的實測 |
@@ -164,7 +169,7 @@ GitHub 上游優先直連：版本號讀 `releases/latest` 的轉址，雜湊直
 
 ## 5. 已知的結構性限制
 
-- 離線時查最新版失敗，已安裝的配方也會被擋。這是「一律最新版」的直接後果。
+- 離線時查最新版失敗，已安裝的配方也會被擋。這是「一律最新版」的直接後果。改法已定案，列在 `docs/PROGRESS.md`〈待辦〉。
 - VM 層的 `/repo` 唯讀只靠 guest 端 `mount -o ro`，guest root 可以 remount 成可寫。virtiofsd 1.10.0 沒有唯讀選項。
 - LXC 層是 privileged 容器，容器內 root 等於 host root。
 - 舊 provision 佈建過的機器，不保證能直接改跑 `mksctl`。第 4 步遇到舊 `.list` 或 `/etc/apt/sources.list` 的衝突時停止並印出清除指令。

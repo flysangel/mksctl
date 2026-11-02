@@ -7,12 +7,24 @@
 - 配方的實測狀態：podman 層的配方不留紀錄，用 `task test:recipe -- <配方>` 重跑。lxc 與 vm 層的紀錄在 `tests/verified.conf`，用 `task check:verified` 查是否齊全、相符、未過期。配方清單用 `mksctl list --all` 查。
 - Actions 的 `release.yml`：計畫 2 B 段 merge 前的最後一次 push，check 與 smoke 全綠（https://github.com/flysangel/mksctl/actions/runs/41266636324）。build 與 release 照設計只在 tag 上跑。
 - 未驗證：
+  - `release.yml` 的執行檔大小閘門沒有在 Actions 跑過。它在 build job 裡，只在 tag 上跑。
+  - `upstream.Watchdog` 的並行安全沒有用 `go test -race` 驗過。本機沒有 gcc，跑不了 race detector。
   - `weekly.yml` 沒有在 Actions 跑過。workflow 要在 main 才能手動觸發，合併後第一件事是觸發一次。
   - `mksctl update` 的 attestation 驗證沒有真實 release 樣本，只有 fixture 測試。首次 release 後要實跑一次。
 - 改了引擎、配方、`platforms/` 或 `pkgmap.yaml` 後，`tests/verified.conf` 的紀錄會過期，發版前要重跑受影響配方。
 - 還沒有 tag。
 
-## 2. 待辦
+## 2. 進行中
+
+- 分支 `feat/integrity`：下載的完整性與網路強化。內容是大小上限、只走 https、兩段逾時、查最新版重試，取捨見 `docs/ARCHITECTURE.md`〈4. 設計取捨〉。
+- 做到哪：程式、測試與文件都已 commit，`task lint` 與 `task test` 綠。改了 `internal/`，`tests/verified.conf` 的紀錄全部過期，還沒重跑。
+- 下一步：
+  - code review，固定點用 `git merge-base main HEAD`。
+  - 推 `feat/integrity`，看 Actions 的 check 與 smoke。`tests/test_install.sh` 現在要 `openssl`，確認 `ubuntu-latest` 有。
+  - 重跑 lxc 與 vm 層的配方，再跑 `task check:verified`。
+  - merge 回 main。離線略過與快取兩條待辦，等 feat/windows merge 後另開分支做。
+
+## 3. 待辦
 
 ### 計畫 2：剩餘項目
 
@@ -45,8 +57,10 @@
 
 ### 已知問題：完整性與網路（優先）
 
-- `install.sh` 不檢查 CPU 架構、`curl` 沒限 https、下載沒有大小上限。
-- 離線時查最新版失敗會擋已裝配方；離線時 `list` 與 `status` 多等 3 秒。
+- 離線時查最新版失敗會擋已裝配方。使用者已定案的做法：配方已裝、而且 `upstream.IsUnreachable` 判定連不上時，略過該配方，exit 0，印 `Info:`。`install` 與 `check` 都印這行；restore 的 `force` 不適用；有略過時不更新最新版快取。等 feat/windows merge 後做，因為要改 `internal/install/install.go` 的 `fetchAll`，feat/windows 改了它的簽章。查最新版現在會重試暫時性錯誤，封包被丟棄時每個配方要等完 3 次撥號逾時，略過的判斷要考慮這段等待。
+- 離線時 `list` 與 `status` 多等 3 秒。使用者已定案的做法：新版提示拆成寫快取與只讀快取兩步；只有 `install` 寫快取，`check` 不寫，`list` 與 `status` 只讀快取；快取路徑加進 `paths`。等 feat/windows merge 後做，因為要改 `internal/cli/cli.go` 的 `run()` 與 `paths`，feat/windows 也改了這兩處。
+- `recipe.Validate` 強制下載網址用 https。
+- `bin/install.sh` 的 root 權限錯誤訊息裡的 curl，還沒加 `--proto '=https' --tlsv1.2`。
 
 ### 已知問題：安裝流程
 
