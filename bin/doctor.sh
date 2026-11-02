@@ -40,13 +40,15 @@ optional() {
 # main
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
-# 種類樣式取自各命令的版本或說明輸出（go 1.27.3、task 3.54.0、shfmt 3.8.0（輸出不帶 v）、ShellCheck 0.11.0 實測）。
+# 種類樣式取自各命令的版本或說明輸出（go 1.27.3、task 3.54.0、shfmt 3.8.0（輸出不帶 v）、ShellCheck 0.11.0、OpenSSL 3.0.13 實測）。
+# openssl 給 tests/test_install.sh 產生自簽憑證。
 # go-task 的 --version 只印版本號，認不出種類，改看 --help 的開頭說明。
 need go 'Go' '^go version go1\.' go version
 need task 'go-task' 'Falls back to the "default" task' task --help
 need shellcheck 'ShellCheck' 'ShellCheck' shellcheck --version
 need shfmt 'shfmt v3' '^v?3\.' shfmt --version
 need python3 'Python 3' '^Python 3\.' python3 --version
+need openssl 'OpenSSL' '^OpenSSL ' openssl version
 optional podman 'podman 層實測'
 optional lxc-create 'LXC 層實測'
 optional qemu-system-x86_64 'VM 層實測'
