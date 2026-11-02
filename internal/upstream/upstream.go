@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"path"
 	"strings"
@@ -40,12 +39,13 @@ type entry struct {
 	err   error
 }
 
-// HTTPClient 回傳要用的 http.Client。沒設時用預設值。
+// HTTPClient 回傳要用的 http.Client。沒設時用 NewHTTPClient 的設定，不用 http.DefaultClient：
+// DefaultClient 不限等標頭的時間，也會跟著 https 轉到 http。
 func (c *Client) HTTPClient() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return http.DefaultClient
+	return defaultHTTPClient()
 }
 
 // Base 回傳 GitHub 網站的根網址。
@@ -155,6 +155,9 @@ func (c *Client) latestGitHub(ctx context.Context, repo string) (string, error) 
 	return v, nil
 }
 
+// versionLimit 是 latest.url 回應的上限。
+const versionLimit = 4096
+
 func (c *Client) latestURL(ctx context.Context, u string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -169,9 +172,9 @@ func (c *Client) latestURL(ctx context.Context, u string) (string, error) {
 		return "", fmt.Errorf("upstream: %s 回 HTTP %d", u, resp.StatusCode)
 	}
 	// 版本檔只有一行，限制讀取量，避免網址填錯時把整個網頁讀進來。
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	b, err := ReadLimited(resp.Body, versionLimit)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("upstream: 讀 %s：%w", u, err)
 	}
 	v := strings.TrimSpace(string(b))
 	if v == "" {

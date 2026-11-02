@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -51,7 +50,7 @@ func (c *Client) body(ctx context.Context, u string) (string, error) {
 		if resp.StatusCode != http.StatusOK {
 			return "", fmt.Errorf("upstream: %s 回 HTTP %d", u, resp.StatusCode)
 		}
-		b, err := io.ReadAll(io.LimitReader(resp.Body, bodyLimit))
+		b, err := ReadLimited(resp.Body, bodyLimit)
 		if err != nil {
 			return "", fmt.Errorf("upstream: 讀 %s：%w", u, err)
 		}
