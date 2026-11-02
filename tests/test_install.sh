@@ -101,6 +101,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 \
 export CURL_CA_BUNDLE="${W}/cert.pem"
 
 # https 伺服器。/to-http/ 開頭的路徑回 302，轉到同一份檔的 http 網址，給轉址案例用。
+# /no-length/ 開頭的路徑不送 Content-Length，讀到連線關閉為止，給讀取中途的上限案例用。
 cat >"${W}/server.py" <<'PY'
 import functools
 import http.server
@@ -118,6 +119,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Location", f"http://127.0.0.1:{http_port}{rest}")
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+        if self.path.startswith("/no-length/"):
+            path = self.translate_path(self.path[len("/no-length"):])
+            try:
+                with open(path, "rb") as f:
+                    body = f.read()
+            except OSError:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
             return
         super().do_GET()
 
@@ -189,7 +203,7 @@ before="$(requests "${http_log}")"
 rc=0
 out="$(MKSCTL_SYSROOT="${root}" bash "${script}" --base-url "${http_base}" 2>&1)" || rc=$?
 after="$(requests "${http_log}")"
-if ((rc == 1 && before == after)) && [[ -z "$(ls -A "${root}")" ]]; then
+if ((rc == 1 && before == after)) && [[ -z "$(ls -A "${root}")" && "${out}" == *"只收 https://"* ]]; then
   ok "--base-url 是 http:// 時 exit 1 且不送請求"
 else
   bad "--base-url 是 http:// 時 exit 1 且不送請求（rc=${rc}，請求數 ${before} → ${after}）：${out}"
@@ -198,12 +212,16 @@ fi
 root="${W}/root-redir"
 mkdir -p "${root}/usr/local/bin"
 printf 'old\n' >"${root}/usr/local/bin/mksctl"
+before="$(requests "${http_log}")"
 rc=0
 out="$(MKSCTL_SYSROOT="${root}" bash "${script}" --base-url "${base}/to-http" 2>&1)" || rc=$?
-if ((rc == 1)) && [[ "$(cat "${root}/usr/local/bin/mksctl")" == "old" ]]; then
-  ok "https 轉址到 http 時 exit 1 且目標檔不變"
+after="$(requests "${http_log}")"
+# 先確認伺服器真的回了 302，否則這個案例驗不到轉址。
+if command grep -qE '"GET /to-http/[^"]*" 302 ' "${log}" &&
+  ((rc == 1 && before == after)) && [[ "$(cat "${root}/usr/local/bin/mksctl")" == "old" && "${out}" == *"下載"*"失敗"* ]]; then
+  ok "https 轉址到 http 時 exit 1、不打 http 且目標檔不變"
 else
-  bad "https 轉址到 http 時 exit 1 且目標檔不變（rc=${rc}）：${out}"
+  bad "https 轉址到 http 時 exit 1、不打 http 且目標檔不變（rc=${rc}，http 請求數 ${before} → ${after}）：${out}"
 fi
 
 # PATH 前面放一支假的 uname，模擬 arm64 的機器
@@ -244,6 +262,47 @@ else
   bad "checksums.txt 超過 64 KiB 時 exit 1 且目標檔不變（rc=${rc}）：${out}"
 fi
 
+# 同一份 v0.0.3，改走不送 Content-Length 的路徑，驗讀取中途的上限
+root="${W}/root-big-sums-nolen"
+mkdir -p "${root}/usr/local/bin"
+printf 'old\n' >"${root}/usr/local/bin/mksctl"
+rc=0
+out="$(MKSCTL_SYSROOT="${root}" bash "${script}" --base-url "${base}/no-length" --tag v0.0.3 2>&1)" || rc=$?
+if command grep -q '"GET /no-length/download/v0.0.3/checksums.txt' "${log}" &&
+  ((rc == 1)) && [[ "$(cat "${root}/usr/local/bin/mksctl")" == "old" && "${out}" == *"超過上限"* ]]; then
+  ok "沒有 Content-Length 時 checksums.txt 超過 64 KiB 也 exit 1 且目標檔不變"
+else
+  bad "沒有 Content-Length 時 checksums.txt 超過 64 KiB 也 exit 1 且目標檔不變（rc=${rc}）：${out}"
+fi
+
+# PATH 前面放一支拿掉 --max-filesize 的 curl，模擬沒有 Content-Length 時不擋的舊版 curl（< 8.4.0）
+oldcurl="${W}/fake-oldcurl"
+mkdir -p "${oldcurl}"
+cat >"${oldcurl}/curl" <<SH
+#!/bin/bash
+args=()
+while ((\$# > 0)); do
+  if [[ "\$1" == --max-filesize ]]; then
+    shift 2
+    continue
+  fi
+  args+=("\$1")
+  shift
+done
+exec $(command -v curl) "\${args[@]}"
+SH
+chmod +x "${oldcurl}/curl"
+root="${W}/root-big-sums-oldcurl"
+mkdir -p "${root}/usr/local/bin"
+printf 'old\n' >"${root}/usr/local/bin/mksctl"
+rc=0
+out="$(PATH="${oldcurl}:${PATH}" MKSCTL_SYSROOT="${root}" bash "${script}" --base-url "${base}/no-length" --tag v0.0.3 2>&1)" || rc=$?
+if ((rc == 1)) && [[ "$(cat "${root}/usr/local/bin/mksctl")" == "old" && "${out}" == *"超過上限"* ]]; then
+  ok "curl 不擋時，下載後的大小檢查仍擋下超過上限的 checksums.txt"
+else
+  bad "curl 不擋時，下載後的大小檢查仍擋下超過上限的 checksums.txt（rc=${rc}）：${out}"
+fi
+
 # 執行檔上限從 install.sh 讀，不在這裡另寫一份。release.yml 的大小閘門用同一個寫法。
 if [[ "$(command grep -E '^MAX_BIN_BYTES=' "${script}")" =~ ^MAX_BIN_BYTES=\$\(\(([0-9]+)\ \<\<\ ([0-9]+)\)\)$ ]]; then
   max_bin=$((BASH_REMATCH[1] << BASH_REMATCH[2]))
@@ -278,7 +337,7 @@ mkdir -p "${root}/usr/local/bin"
 printf 'old\n' >"${root}/usr/local/bin/mksctl"
 rc=0
 out="$(MKSCTL_SYSROOT="${root}" bash "${script}" --base-url "${base}" --tag v0.0.5 2>&1)" || rc=$?
-if ((rc == 1)) && [[ "$(cat "${root}/usr/local/bin/mksctl")" == "old" ]] && [[ "$(ls -A "${root}/usr/local/bin")" == "mksctl" ]]; then
+if ((rc == 1)) && [[ "$(cat "${root}/usr/local/bin/mksctl")" == "old" && "${out}" == *"執行 version 失敗"* ]] && [[ "$(ls -A "${root}/usr/local/bin")" == "mksctl" ]]; then
   ok "新檔跑不起來時 exit 1、目標檔不變且不留暫存檔"
 else
   bad "新檔跑不起來時 exit 1、目標檔不變且不留暫存檔（rc=${rc}）：${out}"

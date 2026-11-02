@@ -36,11 +36,18 @@ cleanup() {
 # download <網址> <輸出檔> <上限 bytes> — 超過上限時中止，不重試
 download() {
   local url="$1" out="$2" max="$3"
-  local rc=0
+  local rc=0 size
 
   # curl 對 exit 63（超過 --max-filesize）不重試。沒有 Content-Length 時，
-  # curl 下載中途超過上限也會中止（實測 curl 8.5.0）。
+  # curl 8.4.0 起下載中途超過上限也會中止；更舊的 curl 只看 Content-Length，
+  # 所以下載後再量一次大小。
   curl "${CURL_OPTS[@]}" --max-filesize "${max}" -o "${out}" "${url}" || rc=$?
+  if ((rc == 0)); then
+    size="$(wc -c <"${out}")"
+    if ((size > max)); then
+      rc=63
+    fi
+  fi
   if ((rc == 63)); then
     echo "Error: ${url} 超過上限 ${max} bytes，沒有安裝" >&2
     return 1
@@ -90,7 +97,7 @@ main() {
 
   sysroot="${MKSCTL_SYSROOT:-}"
   if [[ -z "${sysroot}" ]] && ((EUID != 0)); then
-    echo "Error: 需要 root 權限，改用 curl -fsSL ... | sudo bash" >&2
+    echo "Error: 需要 root 權限，改用 curl --proto '=https' --tlsv1.2 -fsSL ... | sudo bash" >&2
     return 1
   fi
   for cmd in curl sha256sum install; do

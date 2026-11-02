@@ -60,7 +60,6 @@
 - 離線時查最新版失敗會擋已裝配方。使用者已定案的做法：配方已裝、而且 `upstream.IsUnreachable` 判定連不上時，略過該配方，exit 0，印 `Info:`。`install` 與 `check` 都印這行；restore 的 `force` 不適用；有略過時不更新最新版快取。等 feat/windows merge 後做，因為要改 `internal/install/install.go` 的 `fetchAll`，feat/windows 改了它的簽章。查最新版現在會重試暫時性錯誤，封包被丟棄時每個配方要等完 3 次撥號逾時，略過的判斷要考慮這段等待。
 - 離線時 `list` 與 `status` 多等 3 秒。使用者已定案的做法：新版提示拆成寫快取與只讀快取兩步；只有 `install` 寫快取，`check` 不寫，`list` 與 `status` 只讀快取；快取路徑加進 `paths`。等 feat/windows merge 後做，因為要改 `internal/cli/cli.go` 的 `run()` 與 `paths`，feat/windows 也改了這兩處。
 - `recipe.Validate` 強制下載網址用 https。
-- `bin/install.sh` 的 root 權限錯誤訊息裡的 curl，還沒加 `--proto '=https' --tlsv1.2`。
 
 ### 已知問題：安裝流程
 
