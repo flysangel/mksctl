@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/stretchr/testify/assert"
@@ -504,4 +505,162 @@ func TestTrustMissingMessageMentionsRefresh(t *testing.T) {
 	require.ErrorIs(t, err, ErrTrustMissing)
 	assert.Contains(t, err.Error(), "上游的檔已更新或尚未記錄，執行 task trust:refresh -- gitkraken 重新驗證")
 	dirEmpty(t, f.Dir)
+}
+
+// countServer 依路徑回內容並計次。chunked 為真時先送一半再 flush，回應就沒有 Content-Length，
+// 測得到讀取時的上限，不只是標頭預檢。
+func countServer(t *testing.T, files map[string][]byte, chunked bool) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		b, ok := files[r.URL.Path]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if chunked {
+			_, _ = w.Write(b[:len(b)/2])
+			w.(http.Flusher).Flush()
+			b = b[len(b)/2:]
+		}
+		_, _ = w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &n
+}
+
+func setGlobalLimit(t *testing.T, n int64) {
+	t.Helper()
+	old := globalLimit
+	globalLimit = n
+	t.Cleanup(func() { globalLimit = old })
+}
+
+// trust 記錄的大小就是上限：讀超過就停，回 trust 不符，而且不重試。
+func TestGetTrustSizeCapStopsEarly(t *testing.T) {
+	big := append(append([]byte{}, payload...), []byte("-and-more")...)
+	srv, hits := countServer(t, map[string][]byte{"/tool": big}, true)
+	f := newFetcher(t, srv)
+	f.Recipe = "gitkraken"
+	f.Trust = TrustDB{"tool": {URL: srv.URL + "/tool", Size: int64(len(payload)), SHA256: hexSum(payload)}}
+	a := recipe.Artifact{ID: "tool", URL: srv.URL + "/tool", Checksum: recipe.ChecksumSpec{Trust: true}}
+	_, err := f.Get(context.Background(), a, "v1")
+	require.ErrorIs(t, err, ErrTrustMismatch)
+	require.ErrorIs(t, err, upstream.ErrTooLarge)
+	assert.Contains(t, err.Error(), "task trust:refresh -- gitkraken")
+	assert.Equal(t, int32(1), hits.Load())
+	dirEmpty(t, f.Dir)
+}
+
+// 前面有別的來源時 trust 不會被用到，上限就不能用 trust 的大小。
+func TestGetTrustSizeIgnoredWhenNotFirstSource(t *testing.T) {
+	sums := fmt.Sprintf("%s  tool\n", hexSum(payload))
+	srv, _ := countServer(t, map[string][]byte{"/tool": payload, "/sums": []byte(sums)}, false)
+	f := newFetcher(t, srv)
+	f.Trust = TrustDB{"tool": {URL: srv.URL + "/tool", Size: 1, SHA256: hexSum(payload)}}
+	a := recipe.Artifact{ID: "tool", URL: srv.URL + "/tool",
+		Checksum: recipe.ChecksumSpec{File: srv.URL + "/sums", Trust: true}}
+	_, err := f.Get(context.Background(), a, "v1")
+	require.NoError(t, err)
+}
+
+func TestGetGlobalCapRejectsOversize(t *testing.T) {
+	setGlobalLimit(t, int64(len(payload))-1)
+	srv, hits := countServer(t, map[string][]byte{"/tool": payload}, true)
+	f := newFetcher(t, srv)
+	f.AllowUnverified = true
+	a := recipe.Artifact{ID: "tool", URL: srv.URL + "/tool"}
+	_, err := f.Get(context.Background(), a, "v1")
+	require.ErrorIs(t, err, upstream.ErrTooLarge)
+	assert.Equal(t, int32(1), hits.Load(), "超過上限不重試")
+	dirEmpty(t, f.Dir)
+}
+
+// 剛好等於上限要收，與 install.sh 的 curl --max-filesize 同一個語意。
+func TestGetGlobalCapAllowsExactSize(t *testing.T) {
+	setGlobalLimit(t, int64(len(payload)))
+	srv, _ := countServer(t, map[string][]byte{"/tool": payload}, true)
+	f := newFetcher(t, srv)
+	f.AllowUnverified = true
+	_, err := f.Get(context.Background(), recipe.Artifact{ID: "tool", URL: srv.URL + "/tool"}, "v1")
+	require.NoError(t, err)
+}
+
+// 標頭已說超過上限時，不讀 body 就失敗。
+func TestGetRejectsContentLengthOverCap(t *testing.T) {
+	setGlobalLimit(t, 10)
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Length", "1000")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	f := newFetcher(t, srv)
+	f.AllowUnverified = true
+	_, err := f.Get(context.Background(), recipe.Artifact{ID: "tool", URL: srv.URL + "/tool"}, "v1")
+	require.ErrorIs(t, err, upstream.ErrTooLarge)
+	assert.Contains(t, err.Error(), "Content-Length 1000")
+	assert.Equal(t, int32(1), hits.Load())
+	dirEmpty(t, f.Dir)
+}
+
+func TestRecordHonorsGlobalCap(t *testing.T) {
+	setGlobalLimit(t, int64(len(payload))-1)
+	srv, hits := countServer(t, map[string][]byte{"/tool": payload}, true)
+	f := newFetcher(t, srv)
+	_, err := f.Record(context.Background(), recipe.Artifact{ID: "tool", URL: srv.URL + "/tool"}, "v1")
+	require.ErrorIs(t, err, upstream.ErrTooLarge)
+	assert.Equal(t, int32(1), hits.Load())
+	dirEmpty(t, f.Dir)
+}
+
+// checksum 檔超過上限時，錯誤要講大小，不能截斷後回「找不到雜湊」。
+func TestGetSmallOverLimitFails(t *testing.T) {
+	sums := []byte(strings.Repeat("x", smallLimit) + "\n" + hexSum(payload) + "  helm.tar.gz\n")
+	srv, hits := countServer(t, map[string][]byte{"/helm.tar.gz": payload, "/sums": sums}, true)
+	f := newFetcher(t, srv)
+	a := recipe.Artifact{ID: "helm", URL: srv.URL + "/helm.tar.gz",
+		Checksum: recipe.ChecksumSpec{File: srv.URL + "/sums"}}
+	_, err := f.Get(context.Background(), a, "v1")
+	require.ErrorIs(t, err, ErrUnverified)
+	assert.Contains(t, err.Error(), "超過 16777216 bytes")
+	assert.NotContains(t, err.Error(), "找不到")
+	assert.Equal(t, int32(2), hits.Load(), "主檔一次、checksum 檔一次，不重試")
+	dirEmpty(t, f.Dir)
+}
+
+// 下載到一半卡住時，看門狗要中止，不能一直等。
+func TestDownloadStallTimesOut(t *testing.T) {
+	old, oldDelay := idleTimeout, retryDelay
+	idleTimeout, retryDelay = 50*time.Millisecond, time.Millisecond
+	t.Cleanup(func() { idleTimeout, retryDelay = old, oldDelay })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write([]byte("part"))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	f := newFetcher(t, srv)
+	f.AllowUnverified = true
+	start := time.Now()
+	_, err := f.Get(context.Background(), recipe.Artifact{ID: "tool", URL: srv.URL + "/tool"}, "v1")
+	require.ErrorIs(t, err, upstream.ErrStalled)
+	assert.Less(t, time.Since(start), 5*time.Second)
+	dirEmpty(t, f.Dir)
+}
+
+func TestLoadTrustRequiresSize(t *testing.T) {
+	for name, y := range map[string]string{
+		"missing": fmt.Sprintf("tool:\n  url: http://x/tool\n  sha256: %s\n", hexSum(payload)),
+		"zero":    fmt.Sprintf("tool:\n  url: http://x/tool\n  size: 0\n  sha256: %s\n", hexSum(payload)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := LoadTrust([]byte(y))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "size")
+		})
+	}
 }

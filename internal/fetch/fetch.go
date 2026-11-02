@@ -3,7 +3,6 @@
 package fetch
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -46,8 +45,14 @@ const (
 	smallLimit = 16 << 20
 )
 
-// retryDelay 是重試間隔的基數，第 n 次重試等 n 倍。
-var retryDelay = 200 * time.Millisecond
+var (
+	// retryDelay 是重試間隔的基數，第 n 次重試等 n 倍。
+	retryDelay = 200 * time.Millisecond
+	// globalLimit 是沒有 trust 記錄可當上限時的下載上限。只防無限串流：已知最大的檔約 200 MB。
+	globalLimit int64 = 2 << 30
+	// idleTimeout 是下載中途多久沒有新資料就中止。做成變數只為了讓測試改小。
+	idleTimeout = upstream.IdleTimeout
+)
 
 // Fetcher 下載並驗證檔案。
 type Fetcher struct {
@@ -127,23 +132,19 @@ func (f *Fetcher) Get(ctx context.Context, a recipe.Artifact, version string) (R
 		return Result{}, fmt.Errorf("fetch: 網址 %s 取不到檔名", u)
 	}
 
-	tmp, sum, size, err := f.download(ctx, u)
+	limit, byTrust := f.limitFor(a.Checksum, u)
+	tmp, sum, size, err := f.download(ctx, u, limit)
 	if err != nil {
+		if byTrust && errors.Is(err, upstream.ErrTooLarge) {
+			// 比記錄大就一定不是記錄的那個檔，跟雜湊不符同一類，修法也一樣。
+			return Result{}, f.verifyErr(a.ID, u, fmt.Errorf("%w：大小超過記錄的 %d bytes（%w）", ErrTrustMismatch, limit, err))
+		}
 		return Result{}, err
 	}
 	if !f.AllowUnverified || hasSource(a.Checksum) {
 		if err := f.verify(ctx, a.Checksum, d, name, sum, size); err != nil {
 			_ = os.Remove(tmp)
-			err = fmt.Errorf("%s（%s）：%w", a.ID, u, err)
-			switch {
-			case errors.Is(err, ErrTrustMismatch):
-				// 上游換檔是最常見的原因，直接給出修法，使用者不必翻文件。
-				err = fmt.Errorf("%w\n上游的檔已更新，執行 task trust:refresh -- %s 重新驗證", err, f.recipeHint())
-			case errors.Is(err, ErrTrustMissing):
-				// 網址變了（例如版本升級）或還沒記錄過，修法同上。
-				err = fmt.Errorf("%w\n上游的檔已更新或尚未記錄，執行 task trust:refresh -- %s 重新驗證", err, f.recipeHint())
-			}
-			return Result{}, err
+			return Result{}, f.verifyErr(a.ID, u, err)
 		}
 	}
 	dst := filepath.Join(f.Dir, name)
@@ -152,6 +153,31 @@ func (f *Fetcher) Get(ctx context.Context, a recipe.Artifact, version string) (R
 		return Result{}, fmt.Errorf("fetch: 移到 %s：%w", dst, err)
 	}
 	return Result{ID: a.ID, Path: dst, Version: version, SHA256: hex.EncodeToString(sum)}, nil
+}
+
+// verifyErr 在驗證錯誤前加上 artifact 與網址；trust 相關的錯誤另外附上修法。
+func (f *Fetcher) verifyErr(id, u string, err error) error {
+	err = fmt.Errorf("%s（%s）：%w", id, u, err)
+	switch {
+	case errors.Is(err, ErrTrustMismatch):
+		// 上游換檔是最常見的原因，直接給出修法，使用者不必翻文件。
+		err = fmt.Errorf("%w\n上游的檔已更新，執行 task trust:refresh -- %s 重新驗證", err, f.recipeHint())
+	case errors.Is(err, ErrTrustMissing):
+		// 網址變了（例如版本升級）或還沒記錄過，修法同上。
+		err = fmt.Errorf("%w\n上游的檔已更新或尚未記錄，執行 task trust:refresh -- %s 重新驗證", err, f.recipeHint())
+	}
+	return err
+}
+
+// limitFor 決定下載上限。trust 是第一個適用的來源時，用記錄的大小，讀超過就停，不必下載完才比對；
+// 其餘用 globalLimit。「第一個適用」的順序與 verify 相同：前三種來源有設時，trust 不會被用到。
+func (f *Fetcher) limitFor(c recipe.ChecksumSpec, u string) (int64, bool) {
+	if c.Sigstore == nil && c.Provider == "" && c.File == "" && c.Trust {
+		if e, ok := f.Trust.lookup(u); ok && e.Size > 0 {
+			return e.Size, true
+		}
+	}
+	return globalLimit, false
 }
 
 // renderURL 組出樣板資料（Arch 預設 amd64）並算出 a 的下載網址。Get 與 Record 共用。
@@ -183,7 +209,7 @@ func (f *Fetcher) Record(ctx context.Context, a recipe.Artifact, version string)
 	if err != nil {
 		return TrustEntry{}, err
 	}
-	tmp, sum, size, err := f.download(ctx, u)
+	tmp, sum, size, err := f.download(ctx, u, globalLimit)
 	if err != nil {
 		return TrustEntry{}, err
 	}
@@ -234,7 +260,7 @@ func (f *Fetcher) verify(ctx context.Context, c recipe.ChecksumSpec, d tmplData,
 	trustMissing := false
 	if c.Trust {
 		if e, ok := f.Trust.lookup(d.URL); ok {
-			if e.Size != 0 && e.Size != size {
+			if e.Size != size {
 				return fmt.Errorf("%w：大小 %d，記錄 %d", ErrTrustMismatch, size, e.Size)
 			}
 			return compare(e.SHA256, got, ErrTrustMismatch)
@@ -347,7 +373,12 @@ func (f *Fetcher) githubDigest(ctx context.Context, owner, repo, tag, name strin
 // transient 判斷值不值得重試：連線錯誤、5xx 與 429。
 type transientErr struct{ error }
 
-func (f *Fetcher) do(ctx context.Context, u string, h http.Header, sink func(io.Reader) error) error {
+// Unwrap 讓重試用完後回傳的錯誤仍認得出裡面的原因，例如 upstream.ErrStalled。
+func (e transientErr) Unwrap() error { return e.error }
+
+// do 下載 u 交給 sink，暫時性錯誤重試。limit 是回應的上限：Content-Length 超過時不讀就失敗；
+// sink 自己負責讀取時的上限，超過時回 upstream.ErrTooLarge。超過上限不重試：上限是刻意設的，再下載一次也不會變小。
+func (f *Fetcher) do(ctx context.Context, u string, h http.Header, limit int64, sink func(io.Reader) error) error {
 	var last error
 	for i := range attempts {
 		if i > 0 {
@@ -357,7 +388,7 @@ func (f *Fetcher) do(ctx context.Context, u string, h http.Header, sink func(io.
 				return ctx.Err()
 			}
 		}
-		err := f.once(ctx, u, h, sink)
+		err := f.once(ctx, u, h, limit, sink)
 		if err == nil {
 			return nil
 		}
@@ -370,8 +401,10 @@ func (f *Fetcher) do(ctx context.Context, u string, h http.Header, sink func(io.
 	return last
 }
 
-func (f *Fetcher) once(ctx context.Context, u string, h http.Header, sink func(io.Reader) error) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+func (f *Fetcher) once(ctx context.Context, u string, h http.Header, limit int64, sink func(io.Reader) error) error {
+	wd := upstream.NewWatchdog(ctx, idleTimeout)
+	defer wd.Stop()
+	req, err := http.NewRequestWithContext(wd.Context(), http.MethodGet, u, nil)
 	if err != nil {
 		return err
 	}
@@ -392,33 +425,39 @@ func (f *Fetcher) once(ctx context.Context, u string, h http.Header, sink func(i
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("fetch: %s 回 HTTP %d", u, resp.StatusCode)
 	}
-	if err := sink(resp.Body); err != nil {
-		// 讀到一半斷線也算暫時性錯誤。
+	if err := upstream.CheckLength(resp, limit); err != nil {
+		return fmt.Errorf("fetch: %s：%w", u, err)
+	}
+	if err := wd.Err(sink(wd.Reader(resp.Body))); err != nil {
+		if errors.Is(err, upstream.ErrTooLarge) {
+			return fmt.Errorf("fetch: 讀 %s：%w", u, err)
+		}
+		// 讀到一半斷線或卡住（看門狗中止）都算暫時性錯誤。
 		return transientErr{fmt.Errorf("fetch: 讀 %s：%w", u, err)}
 	}
 	return nil
 }
 
 func (f *Fetcher) getSmall(ctx context.Context, u string, h http.Header) ([]byte, error) {
-	var buf bytes.Buffer
-	err := f.do(ctx, u, h, func(r io.Reader) error {
-		buf.Reset()
-		_, err := io.Copy(&buf, io.LimitReader(r, smallLimit))
+	var buf []byte
+	err := f.do(ctx, u, h, smallLimit, func(r io.Reader) error {
+		b, err := upstream.ReadLimited(r, smallLimit)
+		buf = b
 		return err
 	})
-	return buf.Bytes(), err
+	return buf, err
 }
 
 // download 邊寫暫存檔邊算 sha256，大檔不必讀第二遍。暫存檔放在 Dir，
-// 驗證通過後 rename 到正式檔名是同一個檔案系統內的原子操作。
-func (f *Fetcher) download(ctx context.Context, u string) (string, []byte, int64, error) {
+// 驗證通過後 rename 到正式檔名是同一個檔案系統內的原子操作。超過 limit bytes 就停，不寫滿磁碟。
+func (f *Fetcher) download(ctx context.Context, u string, limit int64) (string, []byte, int64, error) {
 	tmp, err := os.CreateTemp(f.Dir, ".mksctl-*.part")
 	if err != nil {
 		return "", nil, 0, fmt.Errorf("fetch: 建暫存檔：%w", err)
 	}
 	h := sha256.New()
 	var size int64
-	err = f.do(ctx, u, nil, func(r io.Reader) error {
+	err = f.do(ctx, u, nil, limit, func(r io.Reader) error {
 		// 重試時從頭寫，避免前一次的殘段混進來。
 		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
 			return err
@@ -427,8 +466,12 @@ func (f *Fetcher) download(ctx context.Context, u string) (string, []byte, int64
 			return err
 		}
 		h.Reset()
-		n, err := io.Copy(io.MultiWriter(tmp, h), r)
+		// 多讀 1 byte 才分得出「剛好等於上限」與「超過上限」。
+		n, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(r, limit+1))
 		size = n
+		if err == nil && n > limit {
+			return fmt.Errorf("%w：超過 %d bytes", upstream.ErrTooLarge, limit)
+		}
 		return err
 	})
 	if cerr := tmp.Close(); err == nil {

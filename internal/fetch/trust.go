@@ -28,6 +28,10 @@ func LoadTrust(data []byte) (TrustDB, error) {
 		if e.URL == "" || len(e.SHA256) != 64 {
 			return nil, fmt.Errorf("fetch: trust 項目 %q 缺 url 或 sha256 長度不對", k)
 		}
+		// size 是下載上限，沒有它就擋不住上游送超大的檔。Record 一定會寫 size。
+		if e.Size <= 0 {
+			return nil, fmt.Errorf("fetch: trust 項目 %q 缺 size 或不是正數", k)
+		}
 	}
 	return db, nil
 }
