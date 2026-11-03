@@ -101,7 +101,8 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 \
 export CURL_CA_BUNDLE="${W}/cert.pem"
 
 # https 伺服器。/to-http/ 開頭的路徑回 302，轉到同一份檔的 http 網址，給轉址案例用。
-# /no-length/ 開頭的路徑不送 Content-Length，讀到連線關閉為止，給讀取中途的上限案例用。
+# /no-length/ 開頭的路徑不送 Content-Length，改用 chunked 傳輸，給讀取中途的上限案例用。
+# 不用「讀到連線關閉為止」：python 關連線時不送 TLS close_notify，OpenSSL 3.5 的 curl 會報 (56)。
 cat >"${W}/server.py" <<'PY'
 import functools
 import http.server
@@ -128,9 +129,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             except OSError:
                 self.send_error(404)
                 return
+            self.protocol_version = "HTTP/1.1"
             self.send_response(200)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Connection", "close")
             self.end_headers()
-            self.wfile.write(body)
+            self.wfile.write(b"%x\r\n%s\r\n0\r\n\r\n" % (len(body), body))
             self.close_connection = True
             return
         super().do_GET()
